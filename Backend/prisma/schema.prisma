@@ -14,24 +14,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
 model User {
-  id        String      @id @default(uuid())
-  name      String?
-  phone     String      @unique
-  role      UserRole @default(Passenger)
-  driver    Driver?
+  id     String   @id @default(uuid())
+  name   String?
+  phone  String   @unique
+  role   UserRole @default(Passenger)
+  driver Driver?
+  rides  Ride[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
 
 model Driver {
-  id        String @id @default(uuid())
-  userId    String @unique
-  user      User   @relation(fields: [userId], references: [id])
-  licenseNumber String
-  vehicleDetails String
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id])
+  licenseNumber      String
+  vehicle            Vehicle?
+  routeId            String?  @unique
+  route              Route?   @relation(fields: [routeId], references: [id])
+  currentLocationLat Float
+  currentLocationLng Float
+  rides              Ride[]   @relation("DriverRides")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Vehicle {
+  id           String @id @default(uuid())
+  driverId     String @unique
+  driver       Driver @relation(fields: [driverId], references: [id])
+  make         String
+  model        String
+  year         Int
+  licensePlate String
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -43,35 +60,54 @@ enum UserRole {
 }
 
 model Route {
-  id        String @id @default(uuid())
+  id String @id @default(uuid())
 
-  name      String
+  name String
 
-  startLat  Float
-  startLng  Float
+  startLat Float
+  startLng Float
 
-  endLat    Float
-  endLng    Float
+  endLat Float
+  endLng Float
+  points RoutePoint[]
+  driver Driver?
+  rides  Ride[]
 }
 
- 
 model Ride {
-  id          String @id @default(uuid())
+  id String @id @default(uuid())
 
   passengerId String
-  routeId     String?
+  passenger   User   @relation(fields: [passengerId], references: [id])
 
-  pickupLat   Float
-  pickupLng   Float
+  routeId String?
+  route   Route?  @relation(fields: [routeId], references: [id])
 
-  status      RideStatus @default(Requested)
+  driverId String?
+  driver   Driver? @relation("DriverRides", fields: [driverId], references: [id])
 
-  createdAt   DateTime @default(now())
+  pickupLat Float
+  pickupLng Float
+
+  status RideStatus @default(Requested)
+
+  createdAt DateTime @default(now())
 }
- 
+
 enum RideStatus {
   Requested
   Accepted
   Completed
   Cancelled
+}
+
+model RoutePoint {
+  id      String @id @default(uuid())
+  routeId String
+  route   Route  @relation(fields: [routeId], references: [id])
+
+  lat Float
+  lng Float
+
+  sequence Int
 }
