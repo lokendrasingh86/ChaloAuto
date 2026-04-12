@@ -37,6 +37,7 @@ model Driver {
   currentLocationLat Float
   currentLocationLng Float
   rides              Ride[]   @relation("DriverRides")
+  isAvailable Boolean @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
