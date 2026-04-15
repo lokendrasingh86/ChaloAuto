@@ -154,21 +154,25 @@ export const acceptRide = async (rideId: string, driverId: string) => {
 
 
 export const  completeRide = async (rideId: string) => {
-    const ride = await prisma.ride.update({
+    const ride = await prisma.ride.findUnique({
         where: { id: rideId },
-        select: { driverId: true },
-        data:{ status: "Completed" }
+        select: { driverId: true }
     });
-    if(!ride) {
+    if(!ride || !ride.driverId ) {
         throw new Error("Ride not found");
     }
-    if(ride.driverId) {
-        await prisma.driver.update({
-            where: { id: ride.driverId },
+    await prisma.$transaction([
+        prisma.ride.update({
+            where: { id: rideId },
+            data: { status: "Completed" }
+        }),
+        prisma.driver.update({
+            where: { id: ride.driverId! },
             data: { isAvailable: true }
-        });
-    }
-    return ride
+        })
+    ]);
+
+    return {message : "Ride completed successfully"};
 }   
 
 
@@ -176,10 +180,13 @@ export const cancelRide = async (rideId: string) => {
 
     const ride = await prisma.ride.findUnique({
         where: { id: rideId },
-        data: { status: "Cancelled" }
+        select :{ driverId: true }
     });
     if(!ride) {
         throw new Error("Ride not found");
+    }
+    if(!ride.driverId) {   
+        throw new Error("Ride has no assigned driver");
     }
 
     await prisma.$transaction([
