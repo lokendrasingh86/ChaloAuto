@@ -32,6 +32,8 @@ export const verifyOtpController = async (req: Request, res: Response) => {
 
     const { user, accessToken } = await verifyOtp(phone, otp);
 
+    if (!user) throw new Error("User not found");
+
     const dbUser = await prisma.user.upsert({
       where: { id: user.id },
       update: {},

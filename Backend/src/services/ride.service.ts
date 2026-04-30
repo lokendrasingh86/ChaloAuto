@@ -1,5 +1,7 @@
 
 import { prisma } from "../lib/prisma.ts";
+import { emitToUser } from "../lib/socket.ts";
+import { findNearestRoutePoint } from "./route.service.ts";
 
 // function distance(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) {
 //     return Math.sqrt(
@@ -21,37 +23,6 @@ function distance ( a: { latitude: number; longitude: number }, b: { latitude: n
     return R * c;
 }
 
-
-
-
-export const findNearestRoutePoint= async (
-    passengerLat : number , 
-    passengerLng : number 
-) => {
-    
-    const points = await prisma.routePoint.findMany();
-    let minDistance = Infinity;
-    let bestPoint = null;
-
-    for(const point of points) {
-        const calculatedDistance = distance(
-            { latitude: passengerLat, longitude: passengerLng },
-            { latitude: point.lat, longitude: point.lng }
-        );
-        if(calculatedDistance < minDistance) {
-            minDistance = calculatedDistance;
-            bestPoint = point;
-        }
-    }
-    if (minDistance > 1) {
-        throw new Error("No nearby route points found");
-    }
-    if(!bestPoint) {
-        throw new Error("No route points available");
-    }
-    return bestPoint;
-}
-
 export const findBestDriver = async (pickupPoint: {
   lat: number;
   lng: number;
@@ -71,7 +42,7 @@ export const findBestDriver = async (pickupPoint: {
     
     for(const driver of drivers) {
         const calculatedDistance = distance(
-            { latitude: driver.currentLat!, longitude: driver.currentLng! },
+            { latitude: driver.currentLocationLat!, longitude: driver.currentLocationLng! },
             { latitude: pickupPoint.lat, longitude: pickupPoint.lng }
         );  
     if (calculatedDistance > 1) continue; 
@@ -127,6 +98,12 @@ export const requestRide = async (passengerId: string, pickupLat: number, pickup
         }
         })
     ]);
+    emitToUser(bestDriver.id, "newRideRequest", {
+        rideId: ride.id,
+        passengerId,
+        pickupLat,
+        pickupLng,
+    });
     return ride;
 }
 
@@ -137,7 +114,6 @@ export const acceptRide = async (rideId: string, driverId: string) => {
         where: { 
             id: rideId,
             status: "Requested",
-            driverId
          }
     });
     if (!ride) {
@@ -146,10 +122,15 @@ export const acceptRide = async (rideId: string, driverId: string) => {
     if(ride.status !== "Requested") {
         throw new Error("Ride is not in a state to be accepted");
     }
-    return await prisma.ride.update({
+    const updatedRide = await prisma.ride.update({
         where: { id: rideId },
-        data: { status: "Accepted" }
+        data: { status: "Accepted" , driverId }
     });
+    emitToUser(ride.passengerId, "rideAccepted", {
+        rideId: updatedRide.id,
+        driverId,
+    });
+    return updatedRide;
 }
 
 
@@ -171,7 +152,9 @@ export const  completeRide = async (rideId: string) => {
             data: { isAvailable: true }
         })
     ]);
-
+    emitToUser(ride.driverId, "rideCompleted", {
+        rideId,
+    });
     return {message : "Ride completed successfully"};
 }   
 
@@ -203,15 +186,40 @@ export const cancelRide = async (rideId: string) => {
         }   
     )
     ]);
+    emitToUser(ride.driverId, "rideCancelled", {
+        rideId,
+    });
     return {message : "Ride cancelled successfully"};
 };    
  
-export const updateDriverLocation = async (driverId: string, lat: number, lng: number) => {
-    return await prisma.driver.update({
-        where: { id: driverId },
-        data: { currentLat: lat, currentLng: lng }
+export const updateDriverLocation = async (
+  driverId: string,
+  lat: number,
+  lng: number
+) => {
+  const driver = await prisma.driver.update({
+    where: { id: driverId },
+    data: { currentLocationLat: lat, currentLocationLng: lng },
+  });
+
+  // 🔥 OPTIONAL: find active ride
+  const ride = await prisma.ride.findFirst({
+    where: {
+      driverId,
+      status: "Accepted",
+    },
+    select: { passengerId: true },
+  });
+
+  if (ride) {
+    emitToUser(ride.passengerId, "driverLocationUpdate", {
+      lat,
+      lng,
     });
-}
+  }
+
+  return driver;
+};
 
 
 export const getRideStatus = async (rideId: string) => {

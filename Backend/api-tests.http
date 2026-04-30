@@ -1,0 +1,121 @@
+### Test ChaloAuto API Endpoints
+# Install the "REST Client" extension in VS Code to click the "Send Request" buttons below.
+
+@baseUrl = http://localhost:5000/api
+
+### 0. Health Check
+GET {{baseUrl}}/health
+
+### ----------------------------------------------------
+### AUTH ENDPOINTS (TESTING LOGIN)
+### ----------------------------------------------------
+
+### A. Request OTP (Using Test Passenger Number)
+POST {{baseUrl}}/auth/request-otp
+Content-Type: application/json
+
+{
+  "phone": "+918888000001"
+}
+
+### B. Verify OTP (Using Fixed Test OTP: 123456)
+POST {{baseUrl}}/auth/verify-otp
+Content-Type: application/json
+
+{
+  "phone": "+918888000001",
+  "otp": "123456"
+}
+
+### ----------------------------------------------------
+### RIDE ENDPOINTS
+### ----------------------------------------------------
+
+### 1. Find Nearest Route Point
+POST {{baseUrl}}/rides/find-nearest-route
+Content-Type: application/json
+
+{
+  "passengerLat": 28.7041,
+  "passengerLng": 77.1025
+}
+
+### 2. Request a Ride
+POST {{baseUrl}}/rides/request
+Content-Type: application/json
+
+{
+  "passengerId": "cm0a5test0000test00000001",
+  "pickupLat": 28.7041,
+  "pickupLng": 77.1025
+}
+
+### 3. Accept a Ride
+POST {{baseUrl}}/rides/accept
+Content-Type: application/json
+
+{
+  "rideId": "cm0a5test0000test00000002",
+  "driverId": "cm0a5test0000test00000003"
+}
+
+### 4. Complete a Ride
+POST {{baseUrl}}/rides/complete
+Content-Type: application/json
+
+{
+  "rideId": "cm0a5test0000test00000002"
+}
+
+### 5. Cancel a Ride
+POST {{baseUrl}}/rides/cancel
+Content-Type: application/json
+
+{
+  "rideId": "cm0a5test0000test00000002"
+}
+
+### 6. Get Ride Status
+GET {{baseUrl}}/rides/cm0a5test0000test00000002/status
+
+### 7. Get Ride Details
+GET {{baseUrl}}/rides/cm0a5test0000test00000002/details
+
+### ----------------------------------------------------
+### PASSENGER RIDE QUERIES
+### ----------------------------------------------------
+
+### 8. Passenger History
+GET {{baseUrl}}/rides/passenger/cm0a5test0000test00000001/history
+
+### 9. All Rides for a Passenger
+GET {{baseUrl}}/rides/passenger/cm0a5test0000test00000001/all
+
+### 10. Current Active Rides for Passenger
+GET {{baseUrl}}/rides/passenger/cm0a5test0000test00000001/current
+
+### ----------------------------------------------------
+### DRIVER RIDE QUERIES & ACTIONS
+### ----------------------------------------------------
+
+### 11. All Rides for a Driver
+GET {{baseUrl}}/rides/driver/cm0a5test0000test00000003/all
+
+### 12. Update Driver Availability
+POST {{baseUrl}}/rides/driver/availability
+Content-Type: application/json
+
+{
+  "driverId": "cm0a5test0000test00000003",
+  "isAvailable": true
+}
+
+### 13. Update Driver Location
+POST {{baseUrl}}/rides/driver/location
+Content-Type: application/json
+
+{
+  "driverId": "cm0a5test0000test00000003",
+  "lat": 28.7045,
+  "lng": 77.1030
+}
