@@ -2,7 +2,8 @@
 import { Router } from "express";
 import routeRoutes from "./route.routes.ts";
 import ridesRoute from "./rides.route.ts";
-import authRoute from "./auth.route.js";
+import authRoute from "./auth.route.ts";
+
 const router = Router();
 
 router.use("/rides", ridesRoute);

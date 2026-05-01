@@ -5,8 +5,27 @@ import {
   getAllRoutesList,
   getRouteById,
   updateRoute,
+  findNearestRoutePoint
 } from "../services/route.service.ts";
 
+export const findNearestRoutePointController = async (req: Request, res: Response) => {
+  try {
+    const { passengerLat, passengerLng } = req.body;
+
+    if (passengerLat === undefined || passengerLng === undefined) {
+      return res.status(400).json({ message: "passengerLat and passengerLng are required" });
+    }
+
+    const bestRoute = await findNearestRoutePoint(passengerLat, passengerLng);
+    return res.status(200).json({ bestRoute });
+  } catch (error) {
+    if (error instanceof Error) {
+      return res.status(400).json({ error: error.message });
+    } else {
+      return res.status(400).json({ error: "An unknown error occurred" });
+    }
+  }
+};
 
 export const getRouteByIdController = async (req: Request, res: Response) => {
   try {

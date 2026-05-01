@@ -33,7 +33,7 @@ model Driver {
   user               User     @relation(fields: [userId], references: [id])
   licenseNumber      String
   vehicle            Vehicle?
-  routeId            String?  @unique
+  routeId            String?  
   route              Route?   @relation(fields: [routeId], references: [id])
   currentLocationLat Float
   currentLocationLng Float
@@ -72,9 +72,11 @@ model Route {
   endLat Float
   endLng Float
   points RoutePoint[]
-  driver Driver?
+  drivers Driver[]
   rides  Ride[]
 }
+
+
 
 model Ride {
   id String @id @default(uuid())
