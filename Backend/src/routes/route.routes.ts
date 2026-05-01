@@ -15,3 +15,4 @@ router.put("/:id", updateRouteController);
 router.delete("/:id", deleteRouteController);
 router.get("/", getAllRoutesController);
 
+export default router;
