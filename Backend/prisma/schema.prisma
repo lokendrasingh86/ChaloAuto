@@ -41,3 +41,37 @@ enum UserRole {
   Passenger
   Driver
 }
+
+model Route {
+  id        String @id @default(uuid())
+
+  name      String
+
+  startLat  Float
+  startLng  Float
+
+  endLat    Float
+  endLng    Float
+}
+
+ 
+model Ride {
+  id          String @id @default(uuid())
+
+  passengerId String
+  routeId     String?
+
+  pickupLat   Float
+  pickupLng   Float
+
+  status      RideStatus @default(Requested)
+
+  createdAt   DateTime @default(now())
+}
+ 
+enum RideStatus {
+  Requested
+  Accepted
+  Completed
+  Cancelled
+}
