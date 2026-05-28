@@ -11,7 +11,7 @@ export const sendOtp = async (phone: string) => {
   }
 
   if (phone === "+919999999999" || phone.includes("99990000") || phone.includes("88880000")) {
-       return { message: "OTP sent successfully" };
+       return { message: "OTP sent successfully (Test Number Bypass)" };
   }
 
     const { error } = await supabase.auth.signInWithOtp({ phone });
@@ -27,12 +27,17 @@ export const verifyOtp = async (phone: string, otp: string) => {
   if ((phone === "+919999999999" || phone.includes("99990000") || phone.includes("88880000")) && otp === "123456") {
        // Check if this test user already exists in our db to reuse its ID
        const cleanPhone = phone.startsWith("+91") ? phone.slice(3) : phone;
-       const existingUser = await prisma.user.findFirst({
-           where: { phone: { endsWith: cleanPhone } }
-       });
+       let existingUser = null;
+       try {
+           existingUser = await prisma.user.findFirst({
+               where: { phone: { endsWith: cleanPhone } }
+           });
+       } catch (error) {
+           console.error("Prisma Error during test OTP bypass. Returning mock user.", error);
+       }
        
        return {
-         user: { id: existingUser?.id || "test-user-id", phone },
+         user: { id: existingUser?.id || `test-user-${Date.now()}`, phone },
          accessToken: "fake-test-jwt-token-abcd",
          refreshToken: "fake-test-refresh-token-abcd"
        };

@@ -24,7 +24,7 @@ export const requestOtp = async (req: Request, res: Response) => {
 
 export const verifyOtpController = async (req: Request, res: Response) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, role } = req.body;
 
     if (!phone || !otp) {
       return res.status(400).json({ message: "Phone and OTP required" });
@@ -34,13 +34,22 @@ export const verifyOtpController = async (req: Request, res: Response) => {
 
     if (!user) throw new Error("User not found");
 
+    // Standardize role to matching Prisma enum
+    const userRole = role === "DRIVER" ? "Driver" : "Passenger";
+
     const dbUser = await prisma.user.upsert({
       where: { id: user.id },
-      update: {},
+      update: {
+        role: userRole
+      },
       create: {
         id: user.id,
         phone: user.phone ?? "",
+        role: userRole
       },
+      include: {
+        driver: true
+      }
     });
 
     return res.status(200).json({

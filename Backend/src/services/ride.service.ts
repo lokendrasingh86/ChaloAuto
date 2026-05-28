@@ -31,9 +31,7 @@ export const findBestDriver = async (pickupPoint: {
     const drivers = await prisma.driver.findMany({
         where: {
             routeId: pickupPoint.routeId,
-            isAvailable: true,
-            currentLat: { not: null },
-            currentLng: { not: null }
+            isAvailable: true 
         }
      });
 
@@ -124,11 +122,28 @@ export const acceptRide = async (rideId: string, driverId: string) => {
     }
     const updatedRide = await prisma.ride.update({
         where: { id: rideId },
-        data: { status: "Accepted" , driverId }
+        data: { status: "Accepted" , driverId },
+        include: {
+            driver: {
+                include: { user: true }
+            }
+        }
     });
+
+    const calculatedDistance = distance(
+        { latitude: ride.pickupLat, longitude: ride.pickupLng },
+        { latitude: updatedRide.driver!.currentLocationLat, longitude: updatedRide.driver!.currentLocationLng }
+    );
+
     emitToUser(ride.passengerId, "rideAccepted", {
         rideId: updatedRide.id,
-        driverId,
+        driver: {
+            id: updatedRide.driver!.id,
+            name: updatedRide.driver!.user.name,
+            phone: updatedRide.driver!.user.phone,
+            licenseNumber: updatedRide.driver!.licenseNumber,
+            distanceKm: calculatedDistance.toFixed(2)
+        }
     });
     return updatedRide;
 }
@@ -252,8 +267,8 @@ export const allRidesByPassenger = async (passengerId: string) => {
                             name: true
                         }
                     },
-                    currentLat: true,
-                    currentLng: true
+                    currentLocationLat: true,
+                    currentLocationLng: true
                 }
             }
         }
@@ -277,8 +292,8 @@ export const getCurrentRides = async (passengerId: string) => {
                             name: true
                         }
                     },
-                    currentLat: true,
-                    currentLng: true
+                    currentLocationLat: true,
+                    currentLocationLng: true
                 }
             }
         }
@@ -297,8 +312,8 @@ export const rideDetails = async (rideId: string) => {
                             name: true
                         }
                     },
-                    currentLat: true,
-                    currentLng: true
+                    currentLocationLat: true,
+                    currentLocationLng: true
                 }
             },
             passenger: {

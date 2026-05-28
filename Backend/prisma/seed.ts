@@ -190,7 +190,7 @@ async function main() {
       }
     });
 
-    const route = createdRoutes[i % createdRoutes.length];
+    const route = createdRoutes[(i - 1) % createdRoutes.length];
     if (!route) {
       throw new Error('No routes created to assign to driver.');
     }
@@ -241,3 +241,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+

@@ -1,10 +1,10 @@
 ### Test ChaloAuto API Endpoints
 # Install the "REST Client" extension in VS Code to click the "Send Request" buttons below.
 
-@baseUrl = http://localhost:5000/api
+@baseUrl = http://localhost:3000/api
 
 ### 0. Health Check
-GET {{baseUrl}}/health
+GET http://localhost:3000/health
 
 ### ----------------------------------------------------
 ### AUTH ENDPOINTS (TESTING LOGIN)
