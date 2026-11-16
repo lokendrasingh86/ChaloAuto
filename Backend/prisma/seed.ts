@@ -208,6 +208,7 @@ async function main() {
         currentLocationLng: route.startLng,
 
         isAvailable: true,
+        capacity: 4,
 
         vehicle: {
           create: {
@@ -230,6 +231,7 @@ async function main() {
   console.log('Driver ID:', drivers[0]?.id);
   console.log('Route ID:', createdRoutes[0]?.id);
 
+  console.log('Test logins: passengers +919999000001..05, drivers +918888000001..05, OTP 123456 (dev only)');
   console.log('🚀 Seeding complete!');
 }
 

@@ -1,0 +1,26 @@
+# Render blueprint for the API. The Frontend deploys separately (Vercel/Netlify).
+services:
+  - type: web
+    name: chaloauto-api
+    runtime: node
+    rootDir: Backend
+    buildCommand: npm install && npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ALLOW_TEST_LOGIN
+        value: "false"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false   # e.g. https://your-frontend.vercel.app
+      - key: ADMIN_USER_IDS
+        sync: false

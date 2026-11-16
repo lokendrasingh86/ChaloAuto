@@ -3,10 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/lib/api';
 import { socket } from '@/lib/socket';
+import RatingDialog from '@/components/RatingDialog';
+import { inr } from '@/lib/geo';
 import { 
-  Home, Search, Calendar, Wallet, Bookmark, User, HelpCircle, 
-  Settings, MapPin, ChevronDown, Bell, ArrowRightLeft, Clock,
-  Ticket, Gift, Headset, Star, MoveRight, Map 
+  Home, Search, Calendar, User, HelpCircle, 
+  Settings, MapPin, ChevronDown, Bell, Map,
+  BarChart3, Bookmark, Ticket, Gift, Headset
 } from 'lucide-react';
 
 export default function PassengerDashboard() {
@@ -14,21 +16,18 @@ export default function PassengerDashboard() {
   const { toast } = useToast();
   const user = JSON.parse(localStorage.getItem('user') || '{}');
 
-  const [lat, setLat] = useState<string>('28.6304');
-  const [lng, setLng] = useState<string>('77.2177');
-  const [loading, setLoading] = useState(false);
+  const [completed, setCompleted] = useState<any>(null);
+  const [ratingBusy, setRatingBusy] = useState(false);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [driverDetails, setDriverDetails] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
-  const [availableDrivers, setAvailableDrivers] = useState<any[]>([]);
 
   const fetchDashboardData = async () => {
     if (!user.id) return;
     try {
-      const [currentRes, historyRes, driversRes] = await Promise.all([
+      const [currentRes, historyRes] = await Promise.all([
         api.get(`/rides/passenger/${user.id}/current`),
-        api.get(`/rides/passenger/${user.id}/history`),
-        api.get(`/users/drivers/available`)
+        api.get(`/rides/passenger/${user.id}/history`)
       ]);
       
       const current = currentRes.data.currentRides[0];
@@ -48,7 +47,6 @@ export default function PassengerDashboard() {
       }
       
       setHistory(historyRes.data.history || []);
-      setAvailableDrivers(driversRes.data.drivers || []);
     } catch (err: any) {
       console.error("Failed to fetch dashboard data", err);
     }
@@ -59,7 +57,9 @@ export default function PassengerDashboard() {
       fetchDashboardData();
       
       socket.connect();
-      socket.emit('joinRoom', user.id);
+
+      socket.on('rideMatched', () => fetchDashboardData());
+      socket.on('rideUnmatched', () => fetchDashboardData());
 
       socket.on('rideAccepted', (data) => {
         setDriverDetails(data.driver);
@@ -68,9 +68,10 @@ export default function PassengerDashboard() {
         fetchDashboardData();
       });
 
-      socket.on('rideCompleted', () => {
+      socket.on('rideCompleted', (data) => {
         setActiveRide(null);
         setDriverDetails(null);
+        setCompleted(data);
         toast({ title: "Ride Completed", description: "You have arrived at your destination." });
         fetchDashboardData();
       });
@@ -84,6 +85,8 @@ export default function PassengerDashboard() {
     }
 
     return () => {
+      socket.off('rideMatched');
+      socket.off('rideUnmatched');
       socket.off('rideAccepted');
       socket.off('rideCompleted');
       socket.off('rideCancelled');
@@ -96,34 +99,30 @@ export default function PassengerDashboard() {
     navigate('/login');
   };
 
-  const requestRide = async () => {
-    if (!lat || !lng) return toast({ title: "Error", description: "Please enter pickup coordinates", variant: "destructive" });
-    
-    setLoading(true);
+  const submitRating = async (stars: number, comment: string) => {
+    if (!completed) return;
+    setRatingBusy(true);
     try {
-      const res = await api.post('/rides/request', {
-        passengerId: user.id,
-        pickupLat: parseFloat(lat),
-        pickupLng: parseFloat(lng)
-      });
+      await api.post('/rides/rate', { rideId: completed.rideId, rating: stars, comment });
+      toast({ title: 'Thanks for rating!' });
       fetchDashboardData();
-      toast({ title: "Success", description: "Ride requested successfully! Waiting for a driver." });
     } catch (err: any) {
-      const errorMessage = err.response?.data?.error || err.response?.data?.message || "Failed to request ride";
-      toast({ title: "Error", description: errorMessage, variant: "destructive" });
+      toast({ title: 'Error', description: err.response?.data?.error || 'Could not save rating', variant: 'destructive' });
     } finally {
-      setLoading(false);
+      setRatingBusy(false);
+      setCompleted(null);
     }
   };
 
+  const [activeNav, setActiveNav] = useState<string>('Dashboard');
+
   const navItems = [
-    { icon: Home, label: 'Dashboard', active: true },
-    { icon: Search, label: 'Find Rides' },
-    { icon: Calendar, label: 'My Bookings' },
-    { icon: Wallet, label: 'Wallet' },
-    { icon: Bookmark, label: 'Saved Places' },
-    { icon: User, label: 'Profile' },
-    { icon: HelpCircle, label: 'Help & Support' },
+    { icon: Home, label: 'Dashboard', path: '/passenger' },
+    { icon: Search, label: 'Find Rides', path: '/find-rides' },
+    { icon: Calendar, label: 'My Bookings', path: '/bookings' },
+    { icon: User, label: 'Profile', path: '/profile' },
+    { icon: HelpCircle, label: 'Help & Support', path: '/help' },
+    { icon: BarChart3, label: 'Simulation', path: '/simulation' },
     { icon: Settings, label: 'Settings', onClick: logout },
   ];
 
@@ -141,14 +140,21 @@ export default function PassengerDashboard() {
           {navItems.map((item, i) => (
             <button
               key={i}
-              onClick={item.onClick}
+              onClick={() => {
+                if (item.onClick) return item.onClick();
+                if (item.path) {
+                  setActiveNav(item.label);
+                  navigate(item.path);
+                }
+              }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-colors ${
-                item.active 
-                  ? 'bg-[#ECFDF5] text-[#0D9488]' 
+                item.label === activeNav
+                  ? 'bg-[#ECFDF5] text-[#0D9488]'
                   : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 cursor-pointer'
               }`}
+              aria-current={item.label === activeNav ? 'page' : undefined}
             >
-              <item.icon className={`w-5 h-5 ${item.active ? 'text-[#0D9488]' : ''}`} />
+              <item.icon className={`w-5 h-5 ${item.label === activeNav ? 'text-[#0D9488]' : ''}`} />
               {item.label}
             </button>
           ))}
@@ -173,7 +179,7 @@ export default function PassengerDashboard() {
         <header className="bg-white px-8 py-4 border-b flex justify-between items-center shrink-0">
           <div className="flex items-center gap-2 px-4 py-2 bg-white rounded-xl border shadow-sm cursor-pointer hover:bg-slate-50 transition-colors">
             <MapPin className="w-4 h-4 text-[#0D9488]" />
-            <span className="text-sm font-semibold">Ahmedabad, Gujarat</span>
+            <span className="text-sm font-semibold">Delhi, India</span>
             <ChevronDown className="w-4 h-4 text-slate-400 ml-2" />
           </div>
           
@@ -207,11 +213,11 @@ export default function PassengerDashboard() {
                    <h2 className="font-bold text-lg mb-1 text-green-900 flex items-center gap-2">
                      Ride Request Active! <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
                    </h2>
-                   <p className="text-sm text-green-700 font-medium">Status: {activeRide.status} (ID: {activeRide.id})</p>
+                   <p className="text-sm text-green-700 font-medium">Status: {activeRide.status}{activeRide.fare != null ? ` · Fare ${inr(activeRide.fare)}` : ''}</p>
                    {driverDetails && (
                        <div className="mt-3 bg-white/60 p-3 rounded-lg border border-green-200">
                          <p className="font-semibold text-green-900">Driver: {driverDetails.name} • {driverDetails.phone}</p>
-                         <p className="text-xs text-green-800 font-medium mt-1">Vehicle Match: {driverDetails.licenseNumber} <span className="mx-2">•</span> Distance: {driverDetails.distanceKm} km</p>
+                         <p className="text-xs text-green-800 font-medium mt-1">Vehicle Match: {driverDetails.licenseNumber} <span className="mx-2">•</span> Distance: {driverDetails.distanceKm ?? 'N/A'} km</p>
                        </div>
                    )}
                 </div>
@@ -231,68 +237,28 @@ export default function PassengerDashboard() {
           {/* Top Row Widgets */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
             
-            {/* Search Widget */}
-            <div className="col-span-1 xl:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-              <div className="flex flex-col md:flex-row items-center gap-4 mb-5 relative">
-                
-                <div className="flex-1 w-full flex items-center bg-white p-3 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors shadow-sm relative">
-                  <div className="w-2 h-2 rounded-full bg-[#0D9488] shrink-0 mr-3"></div>
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500 font-bold px-1 uppercase tracking-wider block">Pickup Latitude (From)</label>
-                    <input 
-                       value={lat} 
-                       onChange={e => setLat(e.target.value)} 
-                       className="bg-transparent border-none outline-none text-sm font-semibold w-full px-1 text-slate-800"
-                    />
-                  </div>
-                </div>
-
-                <button className="w-10 h-10 bg-white border border-slate-200 shadow-sm rounded-full flex items-center justify-center shrink-0 md:absolute md:left-1/2 md:-translate-x-1/2 z-10 text-slate-400 hover:text-slate-700 hover:shadow-md transition-all">
-                  <ArrowRightLeft className="w-4 h-4" />
-                </button>
-
-                <div className="flex-1 w-full flex items-center bg-white p-3 rounded-xl border border-slate-200 hover:border-slate-300 transition-colors shadow-sm">
-                  <div className="w-2 h-2 rounded-full bg-red-500 shrink-0 mr-3"></div>
-                  <div className="flex-1">
-                    <label className="text-[10px] text-slate-500 font-bold px-1 uppercase tracking-wider block">Pickup Longitude (To)</label>
-                    <input 
-                       value={lng}
-                       onChange={e => setLng(e.target.value)}
-                       className="bg-transparent border-none outline-none text-sm font-semibold w-full px-1 text-slate-800"
-                    />
-                  </div>
-                </div>
+            {/* Plan a ride */}
+            <div className="col-span-1 xl:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col justify-between gap-5">
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-800">Book a shared auto</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  Pick your pickup and drop-off on the map. Our matcher pools you with riders going the same way, so you pay less.
+                </p>
               </div>
-
-              <div className="flex flex-col md:flex-row items-center gap-4">
-                <button className="flex justify-between items-center gap-2 px-4 py-3 bg-white border border-slate-200 shadow-sm rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 flex-1 w-full">
-                  <div className="flex items-center gap-2"><Clock className="w-4 h-4 text-slate-500" /> Leave Now</div>
-                </button>
-                <button className="flex justify-between items-center gap-2 px-4 py-3 bg-white border border-slate-200 shadow-sm rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-50 flex-1 w-full">
-                  <div className="flex items-center gap-2"><User className="w-4 h-4 text-slate-500" /> 1 Passenger</div>
-                </button>
-                <button 
-                  onClick={requestRide} 
-                  disabled={loading || !!activeRide}
-                  className="bg-[#0D9488] hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-xl shadow-md w-full md:w-auto min-w-[160px] disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              <div className="flex flex-col md:flex-row gap-4">
+                <button
+                  onClick={() => navigate('/find-rides')}
+                  className="bg-[#0D9488] hover:bg-teal-700 text-white font-bold py-3 px-6 rounded-xl shadow-md flex-1 transition-all"
                 >
-                  {loading ? "Waiting..." : "Find Autos"}
+                  {activeRide ? 'Track my ride' : 'Find Autos'}
+                </button>
+                <button
+                  onClick={() => navigate('/simulation')}
+                  className="border border-slate-200 text-slate-700 font-semibold py-3 px-6 rounded-xl hover:bg-slate-50 flex-1 transition-all"
+                >
+                  How matching works
                 </button>
               </div>
-            </div>
-
-            {/* Wallet Balance */}
-            <div className="col-span-1 md:col-span-12 xl:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center xl:items-start text-center xl:text-left">
-              <h3 className="text-sm font-bold text-slate-800 mb-4 xl:w-full">Wallet Balance</h3>
-              <div className="flex items-center gap-3 mb-6 xl:w-full justify-center xl:justify-start">
-                <div className="bg-[#ECFDF5] p-2.5 rounded-xl text-[#0D9488]">
-                  <Wallet className="w-5 h-5"/>
-                </div>
-                <span className="text-2xl font-extrabold text-slate-800">₹250.00</span>
-              </div>
-              <button className="mt-auto w-full py-2.5 border-2 border-[#ECFDF5] bg-white text-[#0D9488] font-bold rounded-xl hover:bg-[#F0FDF4] transition-colors shadow-sm">
-                Add Money
-              </button>
             </div>
 
             {/* Quick Actions */}
@@ -320,62 +286,8 @@ export default function PassengerDashboard() {
           {/* Middle Row Widgets */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
 
-             {/* Available Rides */}
-             <div className="col-span-1 xl:col-span-7 bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
-               <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-50">
-                 <h3 className="font-bold text-slate-800 text-lg">Available Rides</h3>
-                 <button className="text-[#0D9488] text-sm font-bold hover:underline">View all</button>
-               </div>
-
-               <div className="space-y-4 flex-1">
-                 {availableDrivers.length > 0 ? availableDrivers.map((driver, i) => (
-                   <div key={i} className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 border border-slate-100 rounded-xl hover:shadow-md transition-all bg-white cursor-pointer group">
-                     <div className="w-16 h-12 bg-slate-50 rounded-lg border shadow-sm flex items-center justify-center text-3xl shrink-0 group-hover:scale-105 transition-transform">
-                       🛺
-                     </div>
-                     <div className="flex-1 w-full">
-                       <div className="flex justify-between items-start mb-1">
-                         <h4 className="font-extrabold text-slate-800">{driver.vehicle?.licensePlate || driver.licenseNumber || "N/A"}</h4>
-                         <span className="text-xs font-bold px-2 py-0.5 rounded text-[#0D9488] bg-[#ECFDF5]">Available</span>
-                       </div>
-                       <div className="flex items-center gap-2 mb-2 w-full">
-                         <span className="text-xs font-medium text-slate-600 truncate">{driver.user?.name || "Driver"}</span>
-                         <MoveRight className="w-3 h-3 text-slate-300 shrink-0" />
-                         <span className="text-xs font-medium text-slate-600 truncate">{driver.route?.name || "No assigned route"}</span>
-                       </div>
-                       <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
-                         <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                         <span>4.8 (new)</span>
-                       </div>
-                     </div>
-                     <div className="flex flex-row sm:flex-col justify-between items-center sm:items-end gap-2 shrink-0 md:pl-4 md:border-l md:border-slate-50">
-                       <div className="text-right flex flex-col justify-center h-full pt-1">
-                         <span className="font-extrabold text-xl leading-none text-slate-800">₹--</span>
-                         <p className="text-[10px] text-slate-400 font-semibold mt-1">per seat</p>
-                       </div>
-                       <button 
-                          onClick={requestRide} 
-                          disabled={loading || !!activeRide}
-                          className="bg-[#0D9488] hover:bg-teal-700 text-white text-xs font-bold px-5 py-2 rounded-lg shadow-sm transition-all self-end whitespace-nowrap disabled:opacity-50">
-                         Book Now
-                       </button>
-                     </div>
-                   </div>
-                 )) : (
-                   <p className="text-slate-500 text-sm font-semibold p-4 text-center">No available autos right now.</p>
-                 )}
-               </div>
-
-               <div className="mt-4 pt-4 flex justify-between items-center bg-[#ECFDF5]/50 -mx-6 px-6 -mb-6 pb-6 rounded-b-2xl border-t border-slate-50">
-                 <p className="text-sm font-semibold text-slate-600">Looking for more rides?</p>
-                 <button className="px-5 py-2 border-2 border-[#0D9488] text-[#0D9488] text-xs font-bold rounded-lg bg-white hover:bg-[#F0FDF4] shadow-sm transition-colors">
-                   View All Rides
-                 </button>
-               </div>
-             </div>
-
              {/* Upcoming Booking & Refer */}
-             <div className="col-span-1 xl:col-span-5 space-y-6 flex flex-col">
+             <div className="col-span-1 xl:col-span-12 space-y-6 flex flex-col">
                
                {/* Upcoming Booking */}
                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex-1 flex flex-col">
@@ -446,7 +358,6 @@ export default function PassengerDashboard() {
                      <span className="text-6xl drop-shadow-md">🤝</span>
                   </div>
                </div>
-
              </div>
 
           </div>
@@ -471,6 +382,9 @@ export default function PassengerDashboard() {
                           {ride.driver && (
                             <p className="text-[10px] text-slate-500 font-medium tracking-wide">Driver: {ride.driver.user?.name || ride.driverId}</p>
                           )}
+                          {ride.fare != null && (
+                            <p className="text-[11px] text-slate-600 font-semibold">{inr(ride.fare)}{ride.distanceKm ? ` · ${Number(ride.distanceKm).toFixed(1)} km` : ''}{ride.rating ? ` · ${'★'.repeat(ride.rating)}` : ''}</p>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-row md:flex-col justify-between w-full md:w-auto md:items-end gap-2 mt-4 md:mt-0 select-none">
@@ -491,6 +405,17 @@ export default function PassengerDashboard() {
 
         </div>
       </main>
+
+      {completed && (
+        <RatingDialog
+          fare={completed.fare}
+          distanceKm={completed.distanceKm}
+          driverName={completed.driver?.name}
+          submitting={ratingBusy}
+          onSubmit={submitRating}
+          onSkip={() => setCompleted(null)}
+        />
+      )}
     </div>
   );
 }
