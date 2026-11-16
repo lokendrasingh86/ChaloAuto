@@ -1,11 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
-import 'dotenv/config';
+import "dotenv/config";
 
-const supabaseUrl = process.env.SUPABASE_URL || 'https://dummyurl.supabase.co';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'dummy';
+const supabaseUrl = process.env.SUPABASE_URL || "https://dummyurl.supabase.co";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || "dummy";
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in environment variables");
-}
-
-export const supabase = createClient(supabaseUrl, supabaseServiceKey);
+export const supabase = createClient(supabaseUrl, supabaseKey);

@@ -2,8 +2,10 @@ import { Router } from "express";
 import {
   requestRideController,
   acceptRideController,
+  declineRideController,
   completeRideController,
   cancelRideController,
+  rateRideController,
   getRideStatusController,
   rideHistoryController,
   allRidesByPassengerController,
@@ -11,31 +13,41 @@ import {
   rideDetailsController,
   allRidesByDriverController,
   driverAvailabilityController,
-  updateDriverLocationController
+  updateDriverLocationController,
+  driverStatsController,
+  currentPoolController,
+  cleanupAcceptedRidesController,
 } from "../controllers/ride.controller.ts";
+import { requireDriver, requirePassenger, verifyUser } from "../middleware/verifyUser.middleware.ts";
 
 const router = Router();
 
-// Route Point & Ride Requests 
-router.post("/request", requestRideController);
+// Every ride endpoint needs a logged-in user.
+router.use(verifyUser);
 
-// Ride Lifecycle Actions
-router.post("/accept", acceptRideController);
-router.post("/complete", completeRideController);
-router.post("/cancel", cancelRideController);
-
-// Ride Status and Details
-router.get("/:rideId/status", getRideStatusController);
-router.get("/:rideId/details", rideDetailsController);
-
-// Passenger specific queries
+// Passenger actions
+router.post("/request", requirePassenger, requestRideController);
+router.post("/rate", requirePassenger, rateRideController);
 router.get("/passenger/:passengerId/history", rideHistoryController);
 router.get("/passenger/:passengerId/all", allRidesByPassengerController);
 router.get("/passenger/:passengerId/current", getCurrentRidesController);
 
-// Driver specific queries and actions
-router.get("/driver/:driverId/all", allRidesByDriverController);
-router.post("/driver/availability", driverAvailabilityController);
-router.post("/driver/location", updateDriverLocationController);
+// Driver actions
+router.post("/accept", requireDriver, acceptRideController);
+router.post("/decline", requireDriver, declineRideController);
+router.post("/complete", requireDriver, completeRideController);
+router.post("/driver/availability", requireDriver, driverAvailabilityController);
+router.post("/driver/location", requireDriver, updateDriverLocationController);
+router.get("/driver/:driverId/all", requireDriver, allRidesByDriverController);
+router.get("/driver/:driverId/stats", requireDriver, driverStatsController);
+router.get("/driver/:driverId/current", requireDriver, currentPoolController);
+
+// Either side
+router.post("/cancel", cancelRideController);
+router.get("/:rideId/status", getRideStatusController);
+router.get("/:rideId/details", rideDetailsController);
+
+// Cleanup (testing only, disabled in production)
+router.post("/cleanup/accepted", requireDriver, cleanupAcceptedRidesController);
 
 export default router;
