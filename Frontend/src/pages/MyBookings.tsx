@@ -76,6 +76,8 @@ export default function MyBookings() {
 
   const filteredBookings = bookings.filter(booking => {
     if (filter === 'all') return true;
+    if (filter === 'pending') return ['Requested', 'Accepted', 'PickedUp'].includes(booking.status);
+
     return booking.status.toLowerCase() === filter.toLowerCase();
   });
 
@@ -212,7 +214,7 @@ export default function MyBookings() {
                   {booking.fare != null && (
                     <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-4 border-t border-slate-100">
                       <div className="text-sm text-slate-600 flex items-center gap-3">
-                        <span className="font-bold text-[#0D9488]">{inr(booking.fare)}</span>
+                        <span className="font-bold text-[#0D9488]">{inr(booking.lockedFare ?? booking.fare)}</span>
                         {booking.distanceKm != null && <span>{Number(booking.distanceKm).toFixed(1)} km</span>}
                         {booking.poolId && <span className="flex items-center gap-1 text-xs"><Users className="w-3 h-3" /> shared</span>}
                       </div>

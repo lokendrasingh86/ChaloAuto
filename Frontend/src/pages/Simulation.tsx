@@ -175,11 +175,11 @@ export default function Simulation() {
                       {ALGORITHMS.map((a) => {
                         const v = valueOf(a, interval, metric.key);
                         return (
-                          <div key={a} className="flex flex-1 flex-col items-center justify-end">
+                          <div key={a} className="flex h-full min-w-0 flex-1 flex-col items-center justify-end">
                             <span className="mb-1 text-[11px] font-semibold text-slate-600">{fmt(v, metric)}</span>
                             <div
-                              className="w-full rounded-t-md"
-                              style={{ height: `${Math.max(2, (v / maxValue) * 100)}%`, background: COLORS[a] }}
+                              className="w-full shrink-0 rounded-t-md"
+                              style={{ height: `${Math.max(2, (v / maxValue) * 130)}px`, background: COLORS[a] }}
                               title={`${a}: ${fmt(v, metric)}`}
                             />
                           </div>

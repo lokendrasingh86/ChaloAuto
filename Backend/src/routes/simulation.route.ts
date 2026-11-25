@@ -31,11 +31,15 @@ const readCsv = (file: string): Record<string, string | number>[] => {
 
 // GET /api/simulation/summary -> aggregated results of the pooling simulation
 router.get("/summary", (_req, res) => {
-  const dir = candidateDirs.find((d) => fs.existsSync(d));
-  if (!dir) {
-    return res.status(404).json({ error: "Simulation results not found" });
-  }
+  const dir = candidateDirs.find((d) =>
+    fs.existsSync(path.join(d, "summary.csv")) && fs.existsSync(path.join(d, "demand_summary.csv")),
+  );
   try {
+    if (!dir) {
+      // Same saved results already shipped by the frontend. This is a snapshot,
+      // not a new simulation run. Keep a backend copy for Backend-only deploys.
+      return res.json(JSON.parse(fs.readFileSync(new URL("../../data/simulation-summary.json", import.meta.url), "utf-8")));
+    }
     res.json({
       baseline: readCsv(path.join(dir, "summary.csv")),
       demand: readCsv(path.join(dir, "demand_summary.csv")),

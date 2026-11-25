@@ -4,6 +4,11 @@ Shared auto-rickshaw rides on fixed city routes. Passengers pick a pickup and dr
 pooling algorithm** (from the Python simulation) groups riders heading the same way, and drivers accept pooled
 trips in real time with live tracking, fares and ratings.
 
+The passenger-choice flow recommends the best System-Aware option among up to four feasible drivers, while
+letting the passenger compare pickup time, occupied/reserved seats, fare, rating and previous completed rides.
+Occupied autos can participate when capacity and route constraints allow. Existing passengers receive a cumulative
+two-minute limit on added planned drop-off delay; fares lock on acceptance. See [setup and verification](docs/PASSENGER_CHOICE.md).
+
 | Folder | What it is |
 |---|---|
 | `Backend/` | Express 5 + Prisma + PostgreSQL + Socket.io API, OTP auth, batch matching, fares, ratings |

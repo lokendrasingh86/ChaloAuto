@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.ts";
-import { emitToUser } from "../lib/socket.ts";
+import { emitToUser, getIo } from "../lib/socket.ts";
+import { choiceService } from "./choice.service.ts";
 import { distance } from "../algorithms/geo.ts";
 import { calculateFare, tripDistanceKm } from "../lib/fare.ts";
 import { findRouteForTrip } from "./route.service.ts";
@@ -31,18 +32,16 @@ export const requestRide = async (
     throw new Error("Both dropLat and dropLng are required");
   }
 
-  const existing = await prisma.ride.findFirst({
-    where: { passengerId, status: { in: ["Requested", "Accepted"] } },
-  });
-  if (existing) {
-    throw new Error("You already have an active ride");
-  }
-
   const trip = await findRouteForTrip(pickupLat, pickupLng, dropLat, dropLng);
   const km = tripDistanceKm(trip.pickup, trip.drop);
   const quote = calculateFare(km, 1);
 
-  const ride = await prisma.ride.create({
+  const ride = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${passengerId} FOR UPDATE`;
+    if (await tx.ride.findFirst({ where: { passengerId, status: { in: ["Requested", "Accepted", "PickedUp"] } } })) {
+      throw new Error("You already have an active ride");
+    }
+    return tx.ride.create({
     data: {
       passengerId,
       routeId: trip.routeId,
@@ -54,6 +53,7 @@ export const requestRide = async (
       fare: quote.fare,
       status: "Requested",
     },
+    });
   });
 
   scheduleMatching();
@@ -66,22 +66,27 @@ export const acceptRide = async (rideId: string, driverId: string) => {
   if (!ride) {
     throw new Error("Ride not found or not offered to you");
   }
+  if (ride.plannerMode === "Choice") return choiceService.accept(rideId, driverId);
 
-  const poolRides = await prisma.ride.findMany({
-    where: ride.poolId ? { poolId: ride.poolId, driverId, status: "Requested" } : { id: ride.id },
-    select: { id: true },
-  });
-  const ids = poolRides.map((r) => r.id);
+  const rides = await prisma.$transaction(async (tx) => {
+    const acceptedAt = new Date();
+    const claimed = await tx.ride.updateMany({
+      where: { id: ride.id, status: "Requested", driverId, poolId: ride.poolId, matchedAt: ride.matchedAt },
+      data: { status: "Accepted", acceptedAt },
+    });
+    if (claimed.count !== 1) throw new Error("Ride offer changed; refresh and try again");
 
-  await prisma.ride.updateMany({
-    where: { id: { in: ids } },
-    data: { status: "Accepted", acceptedAt: new Date() },
-  });
-
-  const rides = await prisma.ride.findMany({
-    where: { id: { in: ids } },
-    include: { driver: driverCard, passenger: { select: { name: true, phone: true } } },
-    orderBy: { pickupSequence: "asc" },
+    if (ride.poolId) {
+      await tx.ride.updateMany({
+        where: { poolId: ride.poolId, driverId, status: "Requested" },
+        data: { status: "Accepted", acceptedAt },
+      });
+    }
+    return tx.ride.findMany({
+      where: { ...(ride.poolId ? { poolId: ride.poolId } : { id: ride.id }), driverId, status: "Accepted" },
+      include: { driver: driverCard, passenger: { select: { name: true, phone: true } } },
+      orderBy: { pickupSequence: "asc" },
+    });
   });
 
   for (const r of rides) {
@@ -114,10 +119,17 @@ export const declineRide = async (rideId: string, driverId: string) => {
   if (!ride) {
     throw new Error("Ride not found or not offered to you");
   }
+  if (ride.plannerMode === "Choice") return choiceService.decline(rideId, driverId);
   if (ride.poolId) {
-    await releasePool(ride.poolId, driverId, "Driver declined");
+    if (!await releasePool(ride.poolId, driverId, "Driver declined")) {
+      throw new Error("Ride offer changed; refresh and try again");
+    }
   } else {
-    await prisma.ride.update({ where: { id: ride.id }, data: { driverId: null } });
+    const released = await prisma.ride.updateMany({
+      where: { id: ride.id, driverId, status: "Requested", poolId: null, matchedAt: ride.matchedAt },
+      data: { driverId: null, matchedAt: null },
+    });
+    if (released.count !== 1) throw new Error("Ride offer changed; refresh and try again");
     markDeclined(ride.id, driverId);
   }
   scheduleMatching(500);
@@ -127,12 +139,13 @@ export const declineRide = async (rideId: string, driverId: string) => {
 /** Marks a single ride in the pool as completed (drop-off done). */
 export const completeRide = async (rideId: string, driverId: string) => {
   const ride = await prisma.ride.findFirst({
-    where: { id: rideId, driverId, status: "Accepted" },
+    where: { id: rideId, driverId, status: { in: ["Accepted", "PickedUp"] } },
     include: { driver: driverCard },
   });
   if (!ride) {
     throw new Error("Ride not found or not in progress");
   }
+  if (ride.plannerMode === "Choice") return choiceService.complete(rideId, driverId);
 
   const poolSize = ride.poolId
     ? await prisma.ride.count({ where: { poolId: ride.poolId, status: { in: ["Accepted", "Completed"] } } })
@@ -143,10 +156,12 @@ export const completeRide = async (rideId: string, driverId: string) => {
       : (ride.distanceKm ?? 0);
   const { fare } = calculateFare(km, poolSize);
 
-  const done = await prisma.ride.update({
-    where: { id: rideId },
+  const updated = await prisma.ride.updateMany({
+    where: { id: rideId, driverId, status: "Accepted" },
     data: { status: "Completed", completedAt: new Date(), distanceKm: km, fare },
   });
+  if (updated.count !== 1) throw new Error("Ride changed; refresh and try again");
+  const done = await prisma.ride.findUniqueOrThrow({ where: { id: rideId } });
 
   const payload = {
     rideId,
@@ -169,6 +184,7 @@ export const cancelRide = async (rideId: string, userId: string) => {
   if (!ride) {
     throw new Error("Ride not found");
   }
+  if (ride.plannerMode === "Choice") return choiceService.cancel(rideId, userId);
   const isPassenger = ride.passengerId === userId;
   const isDriver = ride.driver?.userId === userId;
   if (!isPassenger && !isDriver) {
@@ -178,7 +194,11 @@ export const cancelRide = async (rideId: string, userId: string) => {
     throw new Error(`Ride is already ${ride.status.toLowerCase()}`);
   }
 
-  await prisma.ride.update({ where: { id: rideId }, data: { status: "Cancelled" } });
+  const cancelled = await prisma.ride.updateMany({
+    where: { id: rideId, status: ride.status, driverId: ride.driverId, poolId: ride.poolId },
+    data: { status: "Cancelled" },
+  });
+  if (cancelled.count !== 1) throw new Error("Ride changed; refresh and try again");
 
   const payload = { rideId, cancelledBy: isDriver ? "driver" : "passenger" };
   emitToUser(ride.passengerId, "rideCancelled", payload);
@@ -201,23 +221,27 @@ export const rateRide = async (rideId: string, passengerId: string, rating: numb
   if (ride.rating != null) {
     throw new Error("This ride is already rated");
   }
-  return prisma.ride.update({
-    where: { id: rideId },
+  const rated = await prisma.ride.updateMany({
+    where: { id: rideId, passengerId, status: "Completed", rating: null },
     data: { rating, ratingComment: comment?.slice(0, 500) ?? null },
   });
+  if (rated.count !== 1) throw new Error("This ride is already rated or has changed");
+  const result = await prisma.ride.findUniqueOrThrow({ where: { id: rideId } });
+  if (result.driverId) getIo()?.emit("driverOptionsChanged", { driverId: result.driverId });
+  return result;
 };
 
 export const updateDriverLocation = async (driverId: string, lat: number, lng: number) => {
-  if (![lat, lng].every((n) => typeof n === "number" && Number.isFinite(n))) {
+  if (![lat, lng].every((n) => typeof n === "number" && Number.isFinite(n)) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
     throw new Error("Invalid coordinates");
   }
   const driver = await prisma.driver.update({
     where: { id: driverId },
-    data: { currentLocationLat: lat, currentLocationLng: lng },
+    data: { currentLocationLat: lat, currentLocationLng: lng, lastLocationAt: new Date(), locationVersion: { increment: 1 } },
   });
 
   const rides = await prisma.ride.findMany({
-    where: { driverId, status: "Accepted" },
+    where: { driverId, status: { in: ["Accepted", "PickedUp"] } },
     select: { id: true, passengerId: true },
   });
   for (const r of rides) {
@@ -227,6 +251,7 @@ export const updateDriverLocation = async (driverId: string, lat: number, lng: n
 };
 
 export const getRideStatus = async (rideId: string) => {
+  await choiceService.expire();
   const ride = await prisma.ride.findUnique({ where: { id: rideId }, select: { status: true } });
   if (!ride) {
     throw new Error("Ride not found");
@@ -245,14 +270,17 @@ export const rideHistory = async (passengerId: string) => {
 export const allRidesByPassenger = rideHistory;
 
 export const getCurrentRides = async (passengerId: string) => {
-  return await prisma.ride.findMany({
-    where: { passengerId, status: { in: ["Requested", "Accepted"] } },
+  await choiceService.expire();
+  const rides = await prisma.ride.findMany({
+    where: { passengerId, status: { in: ["Requested", "Accepted", "PickedUp"] } },
     include: { route: { select: { name: true } }, driver: driverCard },
   });
+  return Promise.all(rides.map(r => choiceService.decorate(r)));
 };
 
 export const rideDetails = async (rideId: string) => {
-  return await prisma.ride.findUnique({
+  await choiceService.expire();
+  const ride = await prisma.ride.findUnique({
     where: { id: rideId },
     include: {
       route: { select: { name: true } },
@@ -260,6 +288,7 @@ export const rideDetails = async (rideId: string) => {
       passenger: { select: { name: true } },
     },
   });
+  return ride ? choiceService.decorate(ride) : null;
 };
 
 export const allRidesByDriver = async (driverId: string) => {
@@ -272,16 +301,19 @@ export const allRidesByDriver = async (driverId: string) => {
 
 /** Pool currently offered to (or accepted by) a driver, ordered by pickup sequence. */
 export const currentPoolForDriver = async (driverId: string) => {
-  return await prisma.ride.findMany({
-    where: { driverId, status: { in: ["Requested", "Accepted"] } },
+  await choiceService.expire();
+  const rides = await prisma.ride.findMany({
+    where: { driverId, status: { in: ["Requested", "Accepted", "PickedUp"] } },
     include: { passenger: { select: { name: true, phone: true } } },
     orderBy: [{ pickupSequence: "asc" }],
   });
+  return Promise.all(rides.map(r => choiceService.decorate(r, true)));
 };
 
 /** Online/offline toggle. Whether a driver is busy is derived from their active rides. */
 export const driverAvailability = async (driverId: string, isAvailable: boolean) => {
-  const driver = await prisma.driver.update({ where: { id: driverId }, data: { isAvailable } });
+  const driver = await prisma.driver.update({ where: { id: driverId }, data: { isAvailable, routeVersion: { increment: 1 } } });
+  getIo()?.emit("driverOptionsChanged", { driverId });
   if (isAvailable) scheduleMatching(500);
   return driver;
 };

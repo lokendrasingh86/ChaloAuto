@@ -5,10 +5,22 @@ import api from '@/lib/api';
 import { socket } from '@/lib/socket';
 import MapView, { type MapLine, type MapMarker } from '@/components/MapView';
 import RatingDialog from '@/components/RatingDialog';
-import { estimateFare, inr, type LatLng } from '@/lib/geo';
+import DriverOptions, { type DriverOption } from '@/components/DriverOptions';
+import type { Ride } from '@/types/driver';
+import { inr, type LatLng } from '@/lib/geo';
 import { Car, Clock, Loader, Map, MapPin, Navigation, Phone, Users } from 'lucide-react';
 
-type Stage = 'plan' | 'searching' | 'matched' | 'accepted';
+interface RoadAttribution { text: string; mapUrl: string; routingUrl: string }
+interface DriverOptionsResponse {
+  options: DriverOption[];
+  pickup: LatLng;
+  drop: LatLng;
+  routeName: string;
+  serverTime: string;
+  attribution: RoadAttribution;
+}
+
+type Stage = 'plan' | 'choices' | 'searching' | 'matched' | 'accepted' | 'pickedup';
 
 interface Completed {
   rideId: string;
@@ -43,15 +55,30 @@ export default function FindRides() {
   const [message, setMessage] = useState('Finding the best auto for you...');
   const [loading, setLoading] = useState(false);
 
+  const [options, setOptions] = useState<DriverOption[]>([]);
+  const [optionsError, setOptionsError] = useState('');
+  const [attribution, setAttribution] = useState<RoadAttribution | null>(null);
+  const [expiresAt, setExpiresAt] = useState<string | null>(null);
+  const [clockOffset, setClockOffset] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const optionRevisionRef = useRef(0);
+  const selectionRevisionRef = useRef(0);
+  const selectingRef = useRef(false);
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
+  const requestOptionsRef = useRef<() => Promise<void>>(async () => undefined);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+
   const [completed, setCompleted] = useState<Completed | null>(null);
   const [rating, setRating] = useState(false);
 
   const rideRef = useRef<any>(null);
   rideRef.current = ride;
+  const syncRevisionRef = useRef(0);
 
   const pickup: LatLng | null = num(pLat) !== null && num(pLng) !== null ? [num(pLat)!, num(pLng)!] : null;
   const drop: LatLng | null = num(dLat) !== null && num(dLng) !== null ? [num(dLat)!, num(dLng)!] : null;
-  const estimate = pickup && drop ? estimateFare(pickup, drop) : null;
+  const remainingSeconds = expiresAt ? Math.max(0, Math.ceil((Date.parse(expiresAt) - now - clockOffset) / 1000)) : null;
 
   const setPickupPoint = (lat: number, lng: number) => {
     setPLat(lat.toFixed(5));
@@ -63,6 +90,14 @@ export default function FindRides() {
   };
 
   const reset = () => {
+    syncRevisionRef.current++;
+    optionRevisionRef.current++;
+    selectionRevisionRef.current++;
+    selectingRef.current = false;
+    setLoading(false);
+    setOptions([]);
+    setExpiresAt(null);
+    rideRef.current = null;
     setStage('plan');
     setRide(null);
     setDriver(null);
@@ -71,43 +106,24 @@ export default function FindRides() {
     setFare(null);
   };
 
-  // Load routes for the map, and resume an active ride if there is one.
+  // Load routes for the map. Ride state is also recovered after every socket reconnect.
   useEffect(() => {
     api.get('/routes').then((res) => setRoutes(res.data || [])).catch(() => undefined);
-
-    if (!user?.id) return;
-    api
-      .get(`/rides/passenger/${user.id}/current`)
-      .then((res) => {
-        const current = res.data.currentRides?.[0];
-        if (!current) return;
-        setRide(current);
-        setPickupPoint(current.pickupLat, current.pickupLng);
-        if (current.dropLat != null) setDropPoint(current.dropLat, current.dropLng);
-        setFare(current.fare ?? null);
-        if (current.driver) {
-          setDriver({
-            name: current.driver.user?.name,
-            phone: current.driver.user?.phone,
-            licenseNumber: current.driver.licenseNumber,
-            vehicle: current.driver.vehicle ? `${current.driver.vehicle.make} ${current.driver.vehicle.model}` : null,
-          });
-          setDriverPos([current.driver.currentLocationLat, current.driver.currentLocationLng]);
-        }
-        setStage(current.status === 'Accepted' ? 'accepted' : current.driverId ? 'matched' : 'searching');
-      })
-      .catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Real-time updates.
   useEffect(() => {
     if (!user?.id) return;
 
+    let active = true;
     const mine = (data: any) => !data?.rideId || !rideRef.current || data.rideId === rideRef.current.id;
 
     const onMatched = (data: any) => {
       if (!mine(data)) return;
+      syncRevisionRef.current++;
+      if (data.serverTime) setClockOffset(Date.parse(data.serverTime) - Date.now());
+      if (data.expiresAt) setExpiresAt(data.expiresAt);
+      if (data.rideId && !rideRef.current) { const pending = { id: data.rideId, plannerMode: 'Choice', status: 'Requested' }; rideRef.current = pending; setRide(pending); }
       setDriver(data.driver);
       setPooled(!!data.pooled);
       if (data.fare != null) setFare(data.fare);
@@ -116,16 +132,23 @@ export default function FindRides() {
     };
     const onUnmatched = (data: any) => {
       if (!mine(data)) return;
+      if (data.returnToChoices) { reset(); void requestOptionsRef.current(); return; }
+      syncRevisionRef.current++;
       setDriver(null);
+      setDriverPos(null);
+      setPooled(false);
       setStage('searching');
       setMessage(`${data?.reason || 'Driver unavailable'}. Looking for another auto...`);
     };
     const onAccepted = (data: any) => {
       if (!mine(data)) return;
+      syncRevisionRef.current++;
       setDriver(data.driver);
       if (data.driver?.lat != null) setDriverPos([data.driver.lat, data.driver.lng]);
       setPooled(!!data.pooled);
       if (data.fare != null) setFare(data.fare);
+      setRide((previous: Ride | null) => { const next = previous ? { ...previous, status: 'Accepted', lockedFare: data.fare ?? previous.fare } : previous; rideRef.current = next; return next; });
+      setExpiresAt(null);
       setStage('accepted');
       toast({ title: 'Driver accepted!', description: `${data.driver?.name || 'Your driver'} is on the way.` });
     };
@@ -135,6 +158,7 @@ export default function FindRides() {
     };
     const onCompleted = (data: any) => {
       if (!mine(data)) return;
+      syncRevisionRef.current++;
       setCompleted({
         rideId: data.rideId,
         fare: data.fare,
@@ -145,6 +169,7 @@ export default function FindRides() {
     };
     const onCancelled = (data: any) => {
       if (!mine(data)) return;
+      syncRevisionRef.current++;
       reset();
       toast({
         title: 'Ride cancelled',
@@ -153,15 +178,80 @@ export default function FindRides() {
       });
     };
 
-    socket.connect();
+    const syncCurrentRide = async () => {
+      const requestRevision = ++syncRevisionRef.current;
+      const previousId = rideRef.current?.id;
+      try {
+        const res = await api.get(`/rides/passenger/${user.id}/current`);
+        if (!active || requestRevision !== syncRevisionRef.current) return;
+        const current = res.data.currentRides?.[0];
+        if (!current) {
+          // A completion/cancellation may have occurred while the socket was offline.
+          if (previousId) {
+            const details = await api.get(`/rides/${previousId}/details`);
+            if (!active || requestRevision !== syncRevisionRef.current) return;
+            const last = details.data.ride;
+            if (last?.status === 'Completed') {
+              onCompleted({ rideId: last.id, fare: last.fare, distanceKm: last.distanceKm, driver: { name: last.driver?.user?.name } });
+              return;
+            }
+          }
+          if (previousId) { reset(); void requestOptionsRef.current(); }
+          else if (stageRef.current === 'choices') void requestOptionsRef.current();
+          return;
+        }
+        optionRevisionRef.current++;
+        setOptions([]);
+        rideRef.current = current;
+        setRide(current);
+        if (res.data.serverTime) setClockOffset(Date.parse(res.data.serverTime) - Date.now());
+        setExpiresAt(current.offerExpiresAt ?? null);
+        setPooled(!!current.quoteShared);
+        setPickupPoint(current.pickupLat, current.pickupLng);
+        if (current.dropLat != null) setDropPoint(current.dropLat, current.dropLng);
+        setFare(current.lockedFare ?? current.fare ?? null);
+        if (current.driver) {
+          setDriver({ name: current.driver.user?.name, phone: current.driver.user?.phone,
+            licenseNumber: current.driver.licenseNumber,
+            vehicle: current.driver.vehicle ? `${current.driver.vehicle.make} ${current.driver.vehicle.model}` : null });
+          setDriverPos([current.driver.currentLocationLat, current.driver.currentLocationLng]);
+        } else {
+          setDriver(null);
+          setDriverPos(null);
+          setPooled(false);
+        }
+        setStage(current.status === 'PickedUp' ? 'pickedup' : current.status === 'Accepted' ? 'accepted' : current.driverId ? 'matched' : 'searching');
+      } catch {
+        // Preserve the last known state when HTTP is temporarily unavailable.
+      }
+    };
+
+    const onPickedUp = (data: { rideId: string }) => { if (!mine(data)) return; syncRevisionRef.current++; setStage('pickedup'); setRide((previous: Ride | null) => { const next = previous ? { ...previous, status: 'PickedUp' } : previous; rideRef.current = next; return next; }); };
+    let optionTimer: ReturnType<typeof setTimeout>;
+    const onOptionsChanged = () => { if (rideRef.current || selectingRef.current || stageRef.current !== 'choices') return; clearTimeout(optionTimer); optionRevisionRef.current++; setOptions([]); optionTimer = setTimeout(() => { if (!rideRef.current) void requestOptionsRef.current(); }, 300); };
+    socket.on('driverOptionsChanged', onOptionsChanged);
+    socket.on('ridePickedUp', onPickedUp);
+    socket.on('connect', syncCurrentRide);
     socket.on('rideMatched', onMatched);
     socket.on('rideUnmatched', onUnmatched);
     socket.on('rideAccepted', onAccepted);
     socket.on('driverLocationUpdate', onLocation);
     socket.on('rideCompleted', onCompleted);
     socket.on('rideCancelled', onCancelled);
+    void syncCurrentRide();
+    socket.connect();
 
     return () => {
+      active = false;
+      // These refs count async requests; invalidate their latest generations.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      optionRevisionRef.current++;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      selectionRevisionRef.current++;
+      clearTimeout(optionTimer);
+      socket.off('driverOptionsChanged', onOptionsChanged);
+      socket.off('ridePickedUp', onPickedUp);
+      socket.off('connect', syncCurrentRide);
       socket.off('rideMatched', onMatched);
       socket.off('rideUnmatched', onUnmatched);
       socket.off('rideAccepted', onAccepted);
@@ -178,42 +268,82 @@ export default function FindRides() {
       toast({ title: 'Choose both points', description: 'Set a pickup and a drop-off on the map.', variant: 'destructive' });
       return;
     }
+    const revision = ++optionRevisionRef.current;
+    setLoading(true);
+    setOptions([]);
+    setOptionsError('');
+    setStage('choices');
+    try {
+      const res = await api.post<DriverOptionsResponse>('/rides/options', { pickupLat: pickup[0], pickupLng: pickup[1], dropLat: drop[0], dropLng: drop[1] });
+      if (revision !== optionRevisionRef.current || rideRef.current) return;
+      setOptions(res.data.options || []);
+      setPickupPoint(...res.data.pickup as LatLng);
+      setDropPoint(...res.data.drop as LatLng);
+      setAttribution(res.data.attribution);
+      setClockOffset(Date.parse(res.data.serverTime) - Date.now());
+      setNow(Date.now());
+    } catch (err: any) {
+      if (revision !== optionRevisionRef.current) return;
+      setOptionsError(err.response?.status === 503 ? 'Road estimates are temporarily unavailable. Please retry.' : err.response?.data?.error || 'Could not load drivers. Please retry.');
+    } finally { if (revision === optionRevisionRef.current) setLoading(false); }
+  };
+  requestOptionsRef.current = requestRide;
+
+  const selectOption = async (option: DriverOption) => {
+    if (loading) return;
+    const revision = ++selectionRevisionRef.current;
+    syncRevisionRef.current++;
+    optionRevisionRef.current++;
+    selectingRef.current = true;
     setLoading(true);
     try {
-      const res = await api.post('/rides/request', {
-        pickupLat: pickup[0],
-        pickupLng: pickup[1],
-        dropLat: drop[0],
-        dropLng: drop[1],
-      });
-      const created = res.data.ride;
-      setRide(created);
-      setFare(created.fare ?? null);
-      setPickupPoint(created.pickupLat, created.pickupLng);
-      setDropPoint(created.dropLat, created.dropLng);
-      setMessage(`On route: ${created.routeName}. Finding the best auto for you...`);
-      setStage('searching');
-    } catch (err: any) {
-      toast({
-        title: 'Could not request ride',
-        description: err.response?.data?.error || err.response?.data?.message || 'Failed to request ride',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
+      const res = await api.post('/rides/select', { optionId: option.optionId });
+      if (revision !== selectionRevisionRef.current) return;
+      if (rideRef.current?.status === 'Accepted' || rideRef.current?.status === 'PickedUp') return;
+      rideRef.current = res.data.ride;
+      setRide(res.data.ride);
+      setDriver(option.driver);
+      setPooled(option.shared);
+      setFare(res.data.ride.lockedFare ?? res.data.ride.fare ?? option.fare);
+      setExpiresAt(res.data.expiresAt);
+      setClockOffset(Date.parse(res.data.serverTime) - Date.now());
+      setNow(Date.now());
+      setOptions([]);
+      setStage('matched');
+      setMessage('Waiting for your selected driver to respond. Fare locks when accepted.');
+    } catch (err) {
+      if (revision !== selectionRevisionRef.current) return;
+      toast({ title: 'Selection unavailable', description: (err as { response?: { data?: { error?: string } } }).response?.data?.error || 'Please choose again.', variant: 'destructive' });
+      await requestOptionsRef.current();
+    } finally { if (revision === selectionRevisionRef.current) { selectingRef.current = false; setLoading(false); } }
   };
 
   const cancelRequest = async () => {
     if (!ride) return reset();
+    syncRevisionRef.current++;
     try {
       await api.post('/rides/cancel', { rideId: ride.id });
       reset();
       toast({ title: 'Ride cancelled' });
+      void requestOptionsRef.current();
     } catch (err: any) {
       toast({ title: 'Error', description: err.response?.data?.error || 'Failed to cancel', variant: 'destructive' });
     }
   };
+
+  useEffect(() => {
+    if (stage !== 'matched' || remainingSeconds !== 0 || !ride?.id) return;
+    let active = true;
+    const revision = syncRevisionRef.current;
+    api.get(`/rides/passenger/${user.id}/current`).then(res => {
+      if (!active || revision !== syncRevisionRef.current) return;
+      const current = res.data.currentRides?.[0];
+      if (!current) { reset(); void requestOptionsRef.current(); }
+      else if (current.status === 'Accepted' || current.status === 'PickedUp') { rideRef.current = current; setRide(current); setFare(current.lockedFare ?? current.fare); setExpiresAt(null); setStage(current.status === 'PickedUp' ? 'pickedup' : 'accepted'); }
+    }).catch(() => undefined);
+    return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, remainingSeconds, ride?.id]);
 
   const submitRating = async (stars: number, comment: string) => {
     if (!completed) return;
@@ -332,7 +462,7 @@ export default function FindRides() {
         <header className="flex items-center justify-between border-b bg-white px-6 py-4 md:px-8">
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Find Rides</h1>
-            <p className="text-sm text-slate-500">Pick your pickup and drop-off and we will match you with a shared auto.</p>
+            <p className="text-sm text-slate-500">Choose your pickup, drop-off and preferred auto on CP to IGI.</p>
           </div>
           <button
             onClick={() => navigate('/passenger')}
@@ -379,19 +509,6 @@ export default function FindRides() {
                   </div>
                 </details>
 
-                {estimate && (
-                  <div className="mb-4 rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Approx. distance</span>
-                      <span className="font-semibold">{estimate.km.toFixed(1)} km</span>
-                    </div>
-                    <div className="mt-1 flex justify-between">
-                      <span className="text-slate-500">Estimated fare</span>
-                      <span className="font-bold text-[#0D9488]">{inr(estimate.solo)}</span>
-                    </div>
-                    <p className="mt-2 text-xs text-slate-500">Share the auto with another passenger and pay about {inr(estimate.pooled)}.</p>
-                  </div>
-                )}
 
                 <button
                   onClick={requestRide}
@@ -399,10 +516,20 @@ export default function FindRides() {
                   className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#0D9488] py-3 font-bold text-white transition-all hover:bg-teal-700 disabled:opacity-50"
                 >
                   {loading && <Loader className="h-4 w-4 animate-spin" />}
-                  {loading ? 'Requesting...' : 'Find Auto'}
+                  {loading ? 'Loading drivers...' : 'Find Auto'}
                 </button>
               </div>
             )}
+
+            {stage === 'choices' && <section className="space-y-3 rounded-xl bg-slate-50 p-3">
+              <h2 className="text-xl font-bold">Choose your auto</h2>
+              <p className="text-sm">Road-corrected pickup: {pickup?.join(', ')}<br />Road-corrected drop-off: {drop?.join(', ')}</p>
+              <p className="text-xs text-slate-500">Check these map points before choosing. Browsing reserves no seat. Ratings and familiarity do not affect the recommendation.</p>
+              {loading ? <p role="status">Loading eligible drivers...</p> : optionsError ? <p role="alert">{optionsError}</p> : options.length === 0 ? <p>No eligible drivers right now.</p> : <DriverOptions options={options} busy={loading} now={now + clockOffset} onSelect={selectOption} />}
+              <p className="text-xs text-slate-500">{attribution && <><a className="underline" href={attribution.mapUrl} target="_blank" rel="noopener noreferrer">{attribution.text}</a> | <a className="underline" href={attribution.routingUrl} target="_blank" rel="noopener noreferrer">OSRM</a></>}</p>
+              <button disabled={loading} onClick={requestRide} className="rounded border p-2 text-sm">Refresh choices</button>
+              <button disabled={loading} onClick={reset} className="ml-2 rounded border p-2 text-sm">Change trip</button>
+            </section>}
 
             {(stage === 'searching' || stage === 'matched') && (
               <div className="rounded-2xl border border-slate-100 bg-white p-6 text-center shadow-sm">
@@ -412,7 +539,7 @@ export default function FindRides() {
                   </div>
                 </div>
                 <h2 className="mb-2 text-xl font-bold text-slate-800">
-                  {stage === 'matched' ? 'Auto found' : 'Finding your auto'}
+                  {stage === 'matched' ? 'Selected auto' : 'Finding your auto'}
                 </h2>
                 <p className="mb-4 text-sm text-slate-500">{message}</p>
                 {stage === 'matched' && driver && (
@@ -425,6 +552,7 @@ export default function FindRides() {
                     )}
                   </div>
                 )}
+                {remainingSeconds != null && <p role="status">Response window: {remainingSeconds}s{remainingSeconds === 0 ? " - Checking server status..." : ""}</p>}
                 {fare != null && <p className="mb-4 text-sm text-slate-500">Fare: <span className="font-bold text-[#0D9488]">{inr(fare)}</span></p>}
                 <button onClick={cancelRequest} className="w-full rounded-lg bg-red-50 py-3 font-semibold text-red-600 transition-all hover:bg-red-100">
                   Cancel Request
@@ -432,11 +560,11 @@ export default function FindRides() {
               </div>
             )}
 
-            {stage === 'accepted' && (
+            {(stage === 'accepted' || stage === 'pickedup') && (
               <div className="rounded-2xl border border-green-200 bg-gradient-to-br from-[#ECFDF5] to-green-50 p-6 shadow-sm">
                 <div className="mb-4 text-center">
                   <div className="text-4xl">✅</div>
-                  <h2 className="mt-1 text-xl font-bold text-green-900">Driver accepted</h2>
+                  <h2 className="mt-1 text-xl font-bold text-green-900">{stage === 'pickedup' ? 'On board' : 'Driver accepted'}</h2>
                   <p className="text-sm text-green-700">Track your auto live on the map</p>
                 </div>
                 <div className="space-y-3 rounded-xl border border-green-200 bg-white p-4 text-sm">
@@ -455,13 +583,13 @@ export default function FindRides() {
                     </div>
                   )}
                   <div className="flex justify-between border-t pt-3">
-                    <span className="text-slate-500">Fare</span>
+                    <span className="text-slate-500">Locked fare</span>
                     <span className="font-bold text-[#0D9488]">{inr(fare)}</span>
                   </div>
                 </div>
-                <button onClick={cancelRequest} className="mt-4 w-full rounded-lg bg-white py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50">
+                {stage !== 'pickedup' && <button onClick={cancelRequest} className="mt-4 w-full rounded-lg bg-white py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50">
                   Cancel ride
-                </button>
+                </button>}
               </div>
             )}
           </div>

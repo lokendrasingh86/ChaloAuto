@@ -5,6 +5,9 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
+    "test:integration": "tsx --test integration/*.test.ts",
+    "test:browser": "tsx integration/browser.e2e.ts",
+    "test:browser:focused": "tsx integration/focused.browser.ts",
     "seed": "tsx prisma/seed.ts",
     "db:deploy": "prisma migrate deploy",
     "postinstall": "prisma generate"

@@ -17,6 +17,7 @@ model User {
   updatedAt DateTime @updatedAt
   driver    Driver?
   rides     Ride[]
+  choiceOffers ChoiceOffer[]
 }
 
 model Driver {
@@ -34,6 +35,11 @@ model Driver {
   user               User     @relation(fields: [userId], references: [id])
   rides              Ride[]   @relation("DriverRides")
   vehicle            Vehicle?
+  lastLocationAt     DateTime?
+  locationVersion    Int       @default(0)
+  routeVersion       Int       @default(0)
+  remainingStops     Json      @default("[]")
+  choiceOffers       ChoiceOffer[]
 }
 
 model Vehicle {
@@ -58,6 +64,8 @@ model Route {
   drivers  Driver[]
   rides    Ride[]
   points   RoutePoint[]
+  roadGeometry Json?
+  roadGeometryAt DateTime?
 }
 
 model Ride {
@@ -84,11 +92,59 @@ model Ride {
   driver      Driver?    @relation("DriverRides", fields: [driverId], references: [id])
   passenger   User       @relation(fields: [passengerId], references: [id])
   route       Route?     @relation(fields: [routeId], references: [id])
+  plannerMode PlannerMode @default(Legacy)
+  pickedUpAt DateTime?
+  lockedFare Float?
+  quoteShared Boolean @default(false)
+  addedDelaySeconds Int @default(0)
+  rawPickupLat Float?
+  rawPickupLng Float?
+  rawDropLat Float?
+  rawDropLng Float?
+  choiceOffer ChoiceOffer?
 
   @@index([routeId])
   @@index([driverId])
   @@index([poolId])
   @@index([status])
+}
+
+model ChoiceOffer {
+  id String @id @default(uuid())
+  passengerId String
+  driverId String
+  routeId String
+  routeVersion Int
+  locationVersion Int
+  trip Json
+  proposal Json?
+  quoteFare Float
+  quoteDistanceKm Float
+  quoteShared Boolean
+  status ChoiceOfferStatus @default(Quoted)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  rideId String? @unique
+  passenger User @relation(fields: [passengerId], references: [id])
+  driver Driver @relation(fields: [driverId], references: [id])
+  ride Ride? @relation(fields: [rideId], references: [id], onDelete: SetNull)
+  @@index([driverId, status, expiresAt])
+  @@index([passengerId, status, expiresAt])
+}
+
+enum PlannerMode {
+  Legacy
+  Choice
+}
+
+enum ChoiceOfferStatus {
+  Quoted
+  Pending
+  Accepted
+  Declined
+  Expired
+  Cancelled
+  Invalidated
 }
 
 model RoutePoint {
@@ -108,6 +164,7 @@ enum UserRole {
 enum RideStatus {
   Requested
   Accepted
+  PickedUp
   Completed
   Cancelled
 }

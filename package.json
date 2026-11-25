@@ -7,7 +7,7 @@
     "dev:frontend": "npm --prefix Frontend run dev",
     "seed": "npm --prefix Backend run seed",
     "test": "npm --prefix Backend test",
-    "typecheck": "npm --prefix Backend run typecheck && npm --prefix Frontend exec tsc -- -p tsconfig.app.json --noEmit",
+    "typecheck": "npm --prefix Backend run typecheck && npm --prefix Frontend exec -- tsc -p Frontend/tsconfig.app.json --noEmit",
     "simulate": "cd Simulation && python main.py",
     "simulate:export": "cd Simulation && python export_web.py"
   }

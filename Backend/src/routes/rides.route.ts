@@ -1,6 +1,9 @@
 import { Router } from "express";
 import {
   requestRideController,
+  driverOptionsController,
+  selectDriverController,
+  pickupRideController,
   acceptRideController,
   declineRideController,
   completeRideController,
@@ -27,6 +30,8 @@ router.use(verifyUser);
 
 // Passenger actions
 router.post("/request", requirePassenger, requestRideController);
+router.post("/options", requirePassenger, driverOptionsController);
+router.post("/select", requirePassenger, selectDriverController);
 router.post("/rate", requirePassenger, rateRideController);
 router.get("/passenger/:passengerId/history", rideHistoryController);
 router.get("/passenger/:passengerId/all", allRidesByPassengerController);
@@ -36,6 +41,7 @@ router.get("/passenger/:passengerId/current", getCurrentRidesController);
 router.post("/accept", requireDriver, acceptRideController);
 router.post("/decline", requireDriver, declineRideController);
 router.post("/complete", requireDriver, completeRideController);
+router.post("/pickup", requireDriver, pickupRideController);
 router.post("/driver/availability", requireDriver, driverAvailabilityController);
 router.post("/driver/location", requireDriver, updateDriverLocationController);
 router.get("/driver/:driverId/all", requireDriver, allRidesByDriverController);
