@@ -61,6 +61,12 @@ export interface Ride {
   dropLat?: number | null;
   dropLng?: number | null;
   status: RideStatus;
+  plannerMode?: 'Legacy' | 'Choice';
+  quoteShared?: boolean;
+  lockedFare?: number | null;
+  pickedUpAt?: string | null;
+  offerExpiresAt?: string | null;
+  plannedStops?: PoolStop[];
   poolId?: string | null;
   pickupSequence?: number | null;
   dropSequence?: number | null;
@@ -80,7 +86,7 @@ export interface Ride {
   route?: Route;
 }
 
-export type RideStatus = 'Requested' | 'Accepted' | 'Completed' | 'Cancelled';
+export type RideStatus = 'Requested' | 'Accepted' | 'PickedUp' | 'Completed' | 'Cancelled';
 
 export interface RideRequest {
   id: string;
@@ -117,6 +123,9 @@ export interface PoolStop {
 }
 
 export interface PoolOffer {
+  mode?: 'Choice' | 'Legacy';
+  expiresAt?: string | null;
+  serverTime?: string;
   poolId: string;
   rides: PoolRide[];
   stops: PoolStop[];

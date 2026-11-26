@@ -162,7 +162,7 @@ function StatCard({ icon: Icon, label, value, color }: any) {
 }
 
 // ============= INCOMING POOL OFFER COMPONENT =============
-function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
+function IncomingRideRequests({ offer, onAccept, onReject, loading, now, clockOffset }: any) {
   const pool = offer as PoolOffer | null;
   if (!pool) {
     return (
@@ -174,6 +174,7 @@ function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
     );
   }
 
+  const remaining = pool.expiresAt ? Math.max(0, Math.ceil((Date.parse(pool.expiresAt) - now - clockOffset) / 1000)) : null;
   const total = pool.rides.reduce((sum, r) => sum + r.fare, 0);
 
   return (
@@ -188,6 +189,7 @@ function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
         </span>
       </div>
 
+      {remaining != null && <p role="status" className="mb-3 font-bold">Response window: {remaining}s</p>}
       <p className="text-xs font-bold text-amber-700 mb-2 uppercase tracking-wider">Suggested stop order</p>
       <ol className="space-y-2 mb-4">
         {pool.stops.map((stop, i) => (
@@ -202,14 +204,14 @@ function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
       </ol>
 
       <div className="flex justify-between text-sm mb-6">
-        <span className="text-amber-800 font-semibold">Route length ≈ {pool.routeDistanceKm.toFixed(1)} km</span>
+        <span hidden={pool.mode === 'Choice' && !pool.routeDistanceKm} className="text-amber-800 font-semibold">Route length ≈ {pool.routeDistanceKm.toFixed(1)} km</span>
         <span className="font-black text-slate-800">Total fare {inr(total)}</span>
       </div>
 
       <div className="flex gap-3">
         <button
           onClick={onReject}
-          disabled={loading}
+          disabled={loading || remaining === 0}
           className="flex-1 px-4 py-3 bg-red-100 hover:bg-red-200 text-red-700 font-bold rounded-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
         >
           <XCircle className="w-5 h-5" />
@@ -217,7 +219,7 @@ function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
         </button>
         <button
           onClick={onAccept}
-          disabled={loading}
+          disabled={loading || remaining === 0}
           className="flex-1 px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg"
         >
           {loading ? <Loader className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
@@ -229,10 +231,11 @@ function IncomingRideRequests({ offer, onAccept, onReject, loading }: any) {
 }
 
 // ============= CURRENT POOL COMPONENT =============
-function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSimulate, loading }: any) {
+function CurrentRideSection({ rides, driverPos, onComplete, onPickup, simulate, onToggleSimulate, loading }: any) {
   const pool = (rides || []) as Ride[];
   if (pool.length === 0) return null;
 
+  const canonicalStops = pool.find(r => r.plannerMode === 'Choice')?.plannedStops;
   const pickups = [...pool].sort((a, b) => (a.pickupSequence ?? 99) - (b.pickupSequence ?? 99));
   const drops = [...pool].sort((a, b) => (a.dropSequence ?? 99) - (b.dropSequence ?? 99));
 
@@ -247,7 +250,7 @@ function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSi
   });
   if (driverPos) markers.push({ id: 'me', lat: driverPos[0], lng: driverPos[1], kind: 'driver' });
 
-  const stopPoints: LatLng[] = [
+  const stopPoints: LatLng[] = canonicalStops ? [ ...(driverPos ? [driverPos as LatLng] : []), ...canonicalStops.map((stop): LatLng => [stop.lat, stop.lng]) ] : [
     ...(driverPos ? [driverPos as LatLng] : []),
     ...pickups.map((r): LatLng => [r.pickupLat, r.pickupLng]),
     ...drops.filter((r) => r.dropLat != null).map((r): LatLng => [r.dropLat as number, r.dropLng as number]),
@@ -255,6 +258,14 @@ function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSi
   const lines: MapLine[] = [{ id: 'plan', points: stopPoints, color: '#F59E0B', dashed: true }];
 
   const navigateToRide = (ride: Ride) => {
+    if (canonicalStops?.length) {
+      const points = canonicalStops.map(stop => `${stop.lat},${stop.lng}`);
+      const origin = driverPos ? `${driverPos[0]},${driverPos[1]}` : points[0];
+      const destination = points[points.length - 1];
+      const waypoints = points.slice(0, -1).join('|');
+      window.open(`https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&waypoints=${encodeURIComponent(waypoints)}`, '_blank');
+      return;
+    }
     const origin = driverPos
       ? `${driverPos[0]},${driverPos[1]}`
       : `${ride.pickupLat},${ride.pickupLng}`;
@@ -285,6 +296,7 @@ function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSi
         </label>
       </div>
 
+      {canonicalStops && <ol className="mb-4 text-sm">{canonicalStops.map((stop, index) => <li key={`${stop.rideId}-${stop.type}`}>{index + 1}. {stop.type === 'pickup' ? 'Pick up' : 'Drop off'} {stop.passengerName}</li>)}</ol>}
       <MapView markers={markers} lines={lines} height={280} className="mb-5" />
 
       <div className="space-y-3">
@@ -299,7 +311,7 @@ function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSi
             </div>
             <div className="text-xs text-slate-500">
               <p>Pickup #{r.pickupSequence ?? '-'} · Drop #{r.dropSequence ?? '-'}</p>
-              <p className="font-bold text-slate-700">{inr(r.fare)}</p>
+              <p className="font-bold text-slate-700">{inr(r.lockedFare ?? r.fare)}</p>
             </div>
             <button
               onClick={() => navigateToRide(r)}
@@ -308,12 +320,13 @@ function CurrentRideSection({ rides, driverPos, onComplete, simulate, onToggleSi
               <MapIcon className="w-4 h-4" /> Navigate
             </button>
             <button
-              onClick={() => onComplete(r.id)}
-              disabled={loading}
+              onClick={() => r.plannerMode === 'Choice' && r.status === 'Accepted' ? onPickup(r.id) : onComplete(r.id)}
+              disabled={loading || (!!canonicalStops && (canonicalStops[0]?.rideId !== r.id || canonicalStops[0]?.type !== (r.status === 'Accepted' ? 'pickup' : 'dropoff')))}
+              title={canonicalStops ? 'Follow the remaining stop order shown above' : undefined}
               className="px-3 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold rounded-lg text-sm flex items-center gap-1 disabled:opacity-50"
             >
               {loading ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              Dropped off
+              {r.plannerMode === 'Choice' && r.status === 'Accepted' ? 'Picked up' : 'Dropped off'}
             </button>
           </div>
         ))}
@@ -373,7 +386,13 @@ export default function DriverDashboard() {
     reviewCount: 0,
   });
   const [loading, setLoading] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const [clockOffset, setClockOffset] = useState(0);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const refreshGenerationRef = useRef(0);
+  const poolRevisionRef = useRef(0);
+  const positionRevisionRef = useRef(0);
 
   // Fetch initial data
   useEffect(() => {
@@ -385,7 +404,7 @@ export default function DriverDashboard() {
     fetchDriverData();
   }, [user?.id]);
 
-  const offerFromRides = (rides: Ride[]): PoolOffer | null => {
+  const offerFromRides = (rides: Ride[], serverTime?: string): PoolOffer | null => {
     if (rides.length === 0) return null;
     const ordered = [...rides].sort((x, y) => (x.pickupSequence ?? 99) - (y.pickupSequence ?? 99));
     const poolRides: PoolRide[] = ordered.map((r) => ({
@@ -409,10 +428,13 @@ export default function DriverDashboard() {
         .filter((r) => r.dropLat != null)
         .map((r) => ({ type: 'dropoff' as const, rideId: r.id, passengerName: r.passenger?.name || 'Passenger', lat: r.dropLat as number, lng: r.dropLng as number })),
     ];
-    return { poolId: ordered[0]?.poolId || ordered[0]!.id, rides: poolRides, stops, routeDistanceKm: 0 };
+    return { poolId: ordered[0]?.poolId || ordered[0]!.id, rides: poolRides, stops: ordered[0].plannedStops ?? stops, routeDistanceKm: 0, mode: ordered[0].plannerMode, expiresAt: ordered[0].offerExpiresAt, serverTime };
   };
 
   const fetchDriverData = async () => {
+    const generation = ++refreshGenerationRef.current;
+    const poolRevision = poolRevisionRef.current;
+    const positionRevision = positionRevisionRef.current;
     try {
       const driverId = user.driver?.id;
       const [profileRes, ridesRes, statsRes, poolRes] = await Promise.all([
@@ -421,31 +443,39 @@ export default function DriverDashboard() {
         api.get(`/rides/driver/${driverId}/stats`),
         api.get(`/rides/driver/${driverId}/current`),
       ]);
+      if (generation !== refreshGenerationRef.current) return;
 
-      setDriver(profileRes.data);
+      const { driver: profile, ...driverUser } = profileRes.data;
+      setDriver(profile ? { ...profile, user: driverUser } : null);
       setIsOnline(profileRes.data.driver?.isAvailable || false);
       setRideHistory(ridesRes.data.history || []);
       setStats(statsRes.data.stats);
 
-      setDriverPos((prev) =>
-        prev ?? [profileRes.data.driver?.currentLocationLat, profileRes.data.driver?.currentLocationLng],
-      );
+      if (profile && positionRevision === positionRevisionRef.current) setDriverPos([profile.currentLocationLat, profile.currentLocationLng]);
 
-      const active: Ride[] = poolRes.data.rides || [];
-      setCurrentPool(active.filter((r) => r.status === 'Accepted'));
-      setOffer(offerFromRides(active.filter((r) => r.status === 'Requested')));
+      if (poolRevision === poolRevisionRef.current) {
+        const active: Ride[] = poolRes.data.rides || [];
+        setCurrentPool(active.filter((r) => r.status === 'Accepted' || r.status === 'PickedUp'));
+        if (poolRes.data.serverTime) setClockOffset(Date.parse(poolRes.data.serverTime) - Date.now());
+        setOffer(offerFromRides(active.filter((r) => r.status === 'Requested'), poolRes.data.serverTime));
+      }
     } catch (err) {
       console.error('Failed to load driver data', err);
       toast({ title: 'Error', description: 'Failed to load driver data', variant: 'destructive' });
     }
   };
 
+  const refreshDriverRef = useRef(fetchDriverData);
+  refreshDriverRef.current = fetchDriverData;
+
   // Socket.IO connections (the server puts this driver in their rooms from the login token)
   useEffect(() => {
     if (!user?.driver?.id) return;
 
     const onNewRequest = (data: PoolOffer) => {
+      poolRevisionRef.current++;
       setOffer(data);
+      if (data.serverTime) setClockOffset(Date.parse(data.serverTime) - Date.now());
       toast({ title: 'New Ride Request', description: `${data.rides.length} passenger(s) matched to you.` });
       addNotification({
         id: Date.now().toString(),
@@ -457,23 +487,38 @@ export default function DriverDashboard() {
       });
     };
     const onExpired = () => {
+      poolRevisionRef.current++;
       setOffer(null);
-      toast({ title: 'Request expired', description: 'The request was released to another driver.' });
+      void refreshDriverRef.current();
+      toast({ title: 'Request expired', description: 'The passenger can choose a driver again.' });
     };
     const onCancelled = () => {
+      poolRevisionRef.current++;
       toast({ title: 'Ride cancelled', description: 'A passenger cancelled their ride.', variant: 'destructive' });
       fetchDriverData();
     };
+    const onConnect = () => {
+      poolRevisionRef.current++;
+      void refreshDriverRef.current();
+    };
 
-    socket.connect();
+    socket.on('connect', onConnect);
     socket.on('newRideRequest', onNewRequest);
     socket.on('requestExpired', onExpired);
     socket.on('rideCancelled', onCancelled);
+    socket.on('rideCompleted', onConnect);
+    socket.on('ridePickedUp', onConnect);
+    socket.on('rideAccepted', onConnect);
+    socket.connect();
 
     return () => {
+      socket.off('connect', onConnect);
       socket.off('newRideRequest', onNewRequest);
       socket.off('requestExpired', onExpired);
       socket.off('rideCancelled', onCancelled);
+      socket.off('rideCompleted', onConnect);
+      socket.off('ridePickedUp', onConnect);
+      socket.off('rideAccepted', onConnect);
       socket.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -487,9 +532,12 @@ export default function DriverDashboard() {
   posRef.current = driverPos;
 
   useEffect(() => {
-    if (!isOnline || !user?.driver?.id) return;
+    if ((!isOnline && currentPool.length === 0) || !user?.driver?.id) return;
+    let active = true;
     let lastSent = 0;
     const push = (lat: number, lng: number) => {
+      if (!active) return;
+      positionRevisionRef.current++;
       setDriverPos([lat, lng]);
       const now = Date.now();
       if (now - lastSent < 4000) return;
@@ -505,6 +553,17 @@ export default function DriverDashboard() {
         const pool = poolRef.current;
         const cur = posRef.current;
         if (!cur || pool.length === 0) return;
+        const canonical = pool.find(r => r.plannerMode === 'Choice')?.plannedStops;
+        if (canonical) {
+          const next = canonical[0];
+          if (!next) return;
+          const target: LatLng = [next.lat, next.lng];
+          const distance = haversineKm(cur, target);
+          if (distance < 0.01) return; // Driver records pickup/drop-off explicitly.
+          const fraction = Math.min(1, 0.3 / distance);
+          push(cur[0] + (target[0] - cur[0]) * fraction, cur[1] + (target[1] - cur[1]) * fraction);
+          return;
+        }
         const pickups = [...pool].sort((a, b) => (a.pickupSequence ?? 99) - (b.pickupSequence ?? 99));
         const drops = [...pool].sort((a, b) => (a.dropSequence ?? 99) - (b.dropSequence ?? 99));
         let target: LatLng | null = null;
@@ -535,14 +594,23 @@ export default function DriverDashboard() {
         () => undefined,
         { enableHighAccuracy: true, maximumAge: 3000 },
       );
+      // Stationary watches may stay silent; obtain a new fix rather than resend an old coordinate.
+      timer = setInterval(() => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => push(pos.coords.latitude, pos.coords.longitude),
+          () => undefined,
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 },
+        );
+      }, 20000);
     }
 
     return () => {
+      active = false;
       if (timer) clearInterval(timer);
       if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOnline, simulate, user?.driver?.id]);
+  }, [isOnline, simulate, user?.driver?.id, currentPool.length > 0]);
 
   const toggleOnlineStatus = async () => {
     try {
@@ -564,6 +632,7 @@ export default function DriverDashboard() {
   const handleAcceptRide = async () => {
     const first = offer?.rides[0];
     if (!first) return;
+    poolRevisionRef.current++;
     setLoading(true);
     try {
       await api.post('/rides/accept', { rideId: first.rideId });
@@ -589,6 +658,7 @@ export default function DriverDashboard() {
   const handleDeclineRide = async () => {
     const first = offer?.rides[0];
     if (!first) return;
+    poolRevisionRef.current++;
     setLoading(true);
     try {
       await api.post('/rides/decline', { rideId: first.rideId });
@@ -600,7 +670,20 @@ export default function DriverDashboard() {
     }
   };
 
+  const handlePickupRide = async (rideId: string) => {
+    poolRevisionRef.current++;
+    setLoading(true);
+    try {
+      await api.post('/rides/pickup', { rideId });
+      await fetchDriverData();
+    } catch (err) {
+      toast({ title: 'Could not record pickup', description: (err as { response?: { data?: { error?: string } } }).response?.data?.error || 'Please retry.', variant: 'destructive' });
+      await fetchDriverData();
+    } finally { setLoading(false); }
+  };
+
   const handleCompleteRide = async (rideId: string) => {
+    poolRevisionRef.current++;
     setLoading(true);
     try {
       const res = await api.post('/rides/complete', { rideId });
@@ -612,6 +695,13 @@ export default function DriverDashboard() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!offer?.expiresAt) return;
+    const delay = Math.max(0, Date.parse(offer.expiresAt) - Date.now() - clockOffset) + 100;
+    const timer = setTimeout(() => { void refreshDriverRef.current(); }, delay);
+    return () => clearTimeout(timer);
+  }, [offer?.expiresAt, clockOffset]);
 
   const addNotification = (notif: Notification) => {
     setNotifications((prev) => [notif, ...prev].slice(0, 10));
@@ -655,6 +745,8 @@ export default function DriverDashboard() {
                 <div className="lg:col-span-2">
                   <h2 className="text-lg font-black text-slate-800 mb-4">Ride Requests</h2>
                   <IncomingRideRequests
+                    now={now}
+                    clockOffset={clockOffset}
                     offer={offer}
                     onAccept={handleAcceptRide}
                     onReject={handleDeclineRide}
@@ -688,6 +780,7 @@ export default function DriverDashboard() {
                   <CurrentRideSection
                     rides={currentPool}
                     driverPos={driverPos}
+                    onPickup={handlePickupRide}
                     onComplete={handleCompleteRide}
                     simulate={simulate}
                     onToggleSimulate={() => setSimulate((v) => !v)}
@@ -754,6 +847,7 @@ export default function DriverDashboard() {
                 <CurrentRideSection
                   rides={currentPool}
                   driverPos={driverPos}
+                  onPickup={handlePickupRide}
                   onComplete={handleCompleteRide}
                   simulate={simulate}
                   onToggleSimulate={() => setSimulate((v) => !v)}

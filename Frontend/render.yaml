@@ -1,0 +1,18 @@
+# Optional Blueprint for the existing frontend. The Render Dashboard rewrite
+# must also be set on a manually created static site; this file is not auto-read.
+services:
+  - type: web
+    name: chaloauto-demo
+    runtime: static
+    rootDir: Frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

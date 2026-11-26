@@ -8,6 +8,7 @@ import { prisma } from "../lib/prisma.ts";
 import { emitToUser } from "../lib/socket.ts";
 import { calculateFare, tripDistanceKm } from "../lib/fare.ts";
 import { planSystemAware, type Driver, type Passenger } from "../algorithms/systemAware.ts";
+import { choiceService } from "./choice.service.ts";
 
 const MAX_DETOUR_RATIO = Number(process.env.MAX_DETOUR_RATIO) || 0.5;
 const WEIGHT_PROFILE = process.env.MATCHING_PROFILE || "Balanced";
@@ -33,20 +34,21 @@ export function markDeclined(rideId: string, driverId: string) {
 /** Free a pool that was offered to a driver so it goes back into the waiting batch. */
 export async function releasePool(poolId: string, driverId: string, notifyReason: string) {
   const rides = await prisma.ride.findMany({
-    where: { poolId, driverId, status: "Requested" },
+    where: { poolId, driverId, status: "Requested", plannerMode: "Legacy" },
     select: { id: true, passengerId: true },
   });
   if (rides.length === 0) return 0;
-  await prisma.ride.updateMany({
-    where: { id: { in: rides.map((r) => r.id) } },
+  const results = await prisma.$transaction(rides.map((r) => prisma.ride.updateMany({
+    where: { id: r.id, poolId, driverId, status: "Requested", plannerMode: "Legacy" },
     data: { driverId: null, poolId: null, pickupSequence: null, dropSequence: null, matchedAt: null },
-  });
-  for (const r of rides) {
+  })));
+  const released = rides.filter((_, i) => results[i]!.count === 1);
+  for (const r of released) {
     markDeclined(r.id, driverId);
     emitToUser(r.passengerId, "rideUnmatched", { rideId: r.id, reason: notifyReason });
   }
-  emitToUser(driverId, "requestExpired", { poolId });
-  return rides.length;
+  if (released.length) emitToUser(driverId, "requestExpired", { poolId });
+  return released.length;
 }
 
 async function expireStale() {
@@ -54,12 +56,16 @@ async function expireStale() {
 
   // Passengers waiting longer than max wait are cancelled (simulator: max_wait).
   const stale = await prisma.ride.findMany({
-    where: { status: "Requested", driverId: null, createdAt: { lt: new Date(now - MAX_WAIT_MS) } },
+    where: { plannerMode: "Legacy", status: "Requested", driverId: null, createdAt: { lt: new Date(now - MAX_WAIT_MS) } },
     select: { id: true, passengerId: true },
   });
   if (stale.length) {
-    await prisma.ride.updateMany({ where: { id: { in: stale.map((r) => r.id) } }, data: { status: "Cancelled" } });
-    for (const r of stale) {
+    const results = await prisma.$transaction(stale.map((r) => prisma.ride.updateMany({
+      where: { id: r.id, plannerMode: "Legacy", status: "Requested", driverId: null, createdAt: { lt: new Date(now - MAX_WAIT_MS) } },
+      data: { status: "Cancelled" },
+    })));
+    for (const [i, r] of stale.entries()) {
+      if (results[i]!.count !== 1) continue;
       declinedBy.delete(r.id);
       emitToUser(r.passengerId, "rideCancelled", { rideId: r.id, reason: "No auto was available in time" });
     }
@@ -67,7 +73,7 @@ async function expireStale() {
 
   // Offers a driver ignored are released and re-matched.
   const ignored = await prisma.ride.findMany({
-    where: { status: "Requested", driverId: { not: null }, matchedAt: { lt: new Date(now - DRIVER_RESPONSE_MS) } },
+    where: { plannerMode: "Legacy", status: "Requested", driverId: { not: null }, matchedAt: { lt: new Date(now - DRIVER_RESPONSE_MS) } },
     select: { poolId: true, driverId: true },
     distinct: ["poolId"],
   });
@@ -81,6 +87,7 @@ async function matchOnce(): Promise<number> {
 
   const pending = await prisma.ride.findMany({
     where: {
+      plannerMode: "Legacy",
       status: "Requested",
       driverId: null,
       routeId: { not: null },
@@ -99,7 +106,7 @@ async function matchOnce(): Promise<number> {
       include: { user: { select: { name: true, phone: true } }, vehicle: true },
     }),
     prisma.ride.findMany({
-      where: { driverId: { not: null }, status: { in: ["Requested", "Accepted"] } },
+      where: { driverId: { not: null }, status: { in: ["Requested", "Accepted", "PickedUp"] } },
       select: { driverId: true },
       distinct: ["driverId"],
     }),
@@ -152,12 +159,18 @@ async function matchOnce(): Promise<number> {
         map.set(p.id, map.size + 1);
       }
 
-      const results = await prisma.$transaction(
-        plan.passengers.map((p) => {
+      const results = await prisma.$transaction(async tx => {
+        // Serialize claims with choice reservations. A planning snapshot alone
+        // cannot protect the final seat from the other planner.
+        await tx.$queryRaw`SELECT "id" FROM "Driver" WHERE "id" = ${driver.id} FOR UPDATE`;
+        const current = await tx.driver.findUnique({ where: { id: driver.id } });
+        if (!current?.isAvailable || current.routeId !== routeId ||
+          await tx.ride.findFirst({ where: { driverId: driver.id, status: { in: ["Requested", "Accepted", "PickedUp"] } } })) return [];
+        const claims = await Promise.all(plan.passengers.map((p) => {
           const ride = rideById.get(p.id)!;
           const quote = calculateFare(tripDistanceKm(p.pickup, p.destination), plan.passengers.length);
-          return prisma.ride.updateMany({
-            where: { id: ride.id, status: "Requested", driverId: null },
+          return tx.ride.updateMany({
+            where: { id: ride.id, plannerMode: "Legacy", status: "Requested", driverId: null },
             data: {
               driverId: driver.id,
               poolId,
@@ -168,10 +181,12 @@ async function matchOnce(): Promise<number> {
               fare: quote.fare,
             },
           });
-        }),
-      );
+        }));
+        if (claims.some(result => result.count)) await tx.driver.update({ where: { id: driver.id }, data: { routeVersion: { increment: 1 } } });
+        return claims;
+      });
 
-      const matched = plan.passengers.filter((_, i) => results[i]!.count === 1);
+      const matched = plan.passengers.filter((_, i) => results[i]?.count === 1);
       if (matched.length === 0) continue;
       created += 1;
 
@@ -272,7 +287,10 @@ export function scheduleMatching(delay = BATCH_DELAY_MS) {
 
 export function startMatchingLoop() {
   if (loop || process.env.DISABLE_MATCHING_LOOP === "true") return;
-  loop = setInterval(() => void runMatching(), MATCH_INTERVAL_MS);
+  loop = setInterval(() => {
+    void runMatching();
+    void choiceService.expire().catch(err => console.error("Choice expiry failed", err));
+  }, MATCH_INTERVAL_MS);
   loop.unref?.();
 }
 

@@ -445,7 +445,7 @@ export function normalizeFeatures(list: Features[]): Features[] {
   return out;
 }
 
-const WEIGHTS: Record<string, { waiting: number; distance: number; detour: number; vehicles: number }> = {
+export const WEIGHTS: Record<string, { waiting: number; distance: number; detour: number; vehicles: number }> = {
   "passenger-focused": { waiting: 0.5, distance: 0.1, detour: 0.3, vehicles: 0.1 },
   "system-focused": { waiting: 0.1, distance: 0.4, detour: 0.2, vehicles: 0.3 },
   balanced: { waiting: 0.3, distance: 0.25, detour: 0.25, vehicles: 0.2 },

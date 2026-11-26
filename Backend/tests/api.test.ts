@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import path from "node:path";
+import fs from "node:fs";
 
 process.env.SIMULATION_RESULTS_DIR = path.resolve(import.meta.dirname, "../../Simulation/results");
 process.env.DISABLE_MATCHING_LOOP = "true";
@@ -36,10 +37,18 @@ test("GET /api/simulation/summary serves the simulation results", async () => {
   assert.ok(body.demand.length > 0);
 });
 
+test("backend simulation snapshot matches the existing frontend snapshot", () => {
+  const read = (relative: string) => JSON.parse(fs.readFileSync(new URL(relative, import.meta.url), "utf-8"));
+  assert.deepEqual(read("../data/simulation-summary.json"), read("../../Frontend/public/simulation/summary.json"));
+});
+
 for (const [method, url] of [
   ["GET", "/api/rides/passenger/x/history"],
   ["POST", "/api/rides/request"],
   ["POST", "/api/rides/accept"],
+  ["POST", "/api/rides/options"],
+  ["POST", "/api/rides/select"],
+  ["POST", "/api/rides/pickup"],
   ["GET", "/api/users/x"],
   ["PUT", "/api/users/x"],
   ["GET", "/api/routes"],

@@ -2,6 +2,7 @@ import type { Request, RequestHandler, Response } from "express";
 import { prisma } from "../lib/prisma.ts";
 import { getAuthDriverId, getAuthUser } from "../middleware/verifyUser.middleware.ts";
 import * as rideService from "../services/ride.service.ts";
+import { choiceService, ChoiceError } from "../services/choice.service.ts";
 
 /** Wraps an async handler so service errors become `400 { error }` like before. */
 const wrap =
@@ -11,11 +12,24 @@ const wrap =
       await fn(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : "An unknown error occurred";
-      if (!res.headersSent) res.status(400).json({ error: message });
+      if (!res.headersSent) res.status(error instanceof ChoiceError ? error.status : 400).json({ error: message });
     }
   };
 
 const param = (req: Request, name: string): string => String(req.params[name] ?? "");
+
+export const driverOptionsController: RequestHandler = wrap(async (req, res) => {
+  const { pickupLat, pickupLng, dropLat, dropLng } = req.body ?? {};
+  return res.json(await choiceService.options(getAuthUser(req).id, { pickupLat, pickupLng, dropLat, dropLng }));
+});
+export const selectDriverController: RequestHandler = wrap(async (req, res) => {
+  if (typeof req.body?.optionId !== "string") return res.status(400).json({error:"optionId is required"});
+  return res.status(201).json(await choiceService.select(getAuthUser(req).id, req.body.optionId));
+});
+export const pickupRideController: RequestHandler = wrap(async (req, res) => {
+  if (typeof req.body?.rideId !== "string") return res.status(400).json({error:"rideId is required"});
+  return res.json(await choiceService.pickup(req.body.rideId, getAuthDriverId(req)!));
+});
 
 /** Resolves to true if the caller is the ride's passenger or its driver. */
 async function isParticipant(rideId: string, userId: string): Promise<boolean> {
@@ -111,7 +125,7 @@ export const allRidesByPassengerController: RequestHandler = rideHistoryControll
 export const getCurrentRidesController: RequestHandler = wrap(async (req, res) => {
   const passengerId = ownPassenger(req, res);
   if (!passengerId) return;
-  return res.status(200).json({ currentRides: await rideService.getCurrentRides(passengerId) });
+  return res.status(200).json({ currentRides: await rideService.getCurrentRides(passengerId), serverTime: new Date().toISOString() });
 });
 
 const ownDriver = (req: Request, res: Response): string | null => {
@@ -138,7 +152,7 @@ export const driverStatsController: RequestHandler = wrap(async (req, res) => {
 export const currentPoolController: RequestHandler = wrap(async (req, res) => {
   const driverId = ownDriver(req, res);
   if (!driverId) return;
-  return res.status(200).json({ rides: await rideService.currentPoolForDriver(driverId) });
+  return res.status(200).json({ rides: await rideService.currentPoolForDriver(driverId), serverTime: new Date().toISOString() });
 });
 
 export const driverAvailabilityController: RequestHandler = wrap(async (req, res) => {
@@ -164,6 +178,6 @@ export const cleanupAcceptedRidesController: RequestHandler = wrap(async (_req, 
   if (process.env.NODE_ENV === "production") {
     return res.status(403).json({ message: "Disabled in production" });
   }
-  const deleted = await prisma.ride.deleteMany({ where: { status: "Accepted" } });
+  const deleted = await prisma.ride.deleteMany({ where: { status: "Accepted", plannerMode: "Legacy" } });
   return res.status(200).json({ message: `Deleted ${deleted.count} accepted rides`, count: deleted.count });
 });

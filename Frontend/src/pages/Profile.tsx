@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/lib/api';
@@ -9,25 +9,16 @@ import {
 export default function Profile() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const [user, setUser] = useState<{ id?: string; name?: string; phone?: string; role?: string }>(
+    () => JSON.parse(localStorage.getItem('user') || '{}'),
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [, setProfile] = useState<any>(null);
   const [formData, setFormData] = useState({
     name: user?.name || '',
     phone: user?.phone || '',
   });
-
-  useEffect(() => {
-    if (user?.id) {
-      setProfile(user);
-      setFormData({
-        name: user?.name || '',
-        phone: user?.phone || '',
-      });
-    }
-  }, [user]);
 
   const updateProfile = async () => {
     if (!user?.id) return;
@@ -36,10 +27,10 @@ export default function Profile() {
       const res = await api.put(`/users/${user.id}`, { name: formData.name });
       const updatedUser = { ...user, name: res.data.name };
       localStorage.setItem('user', JSON.stringify(updatedUser));
-      setProfile(updatedUser);
+      setUser(updatedUser);
       setIsEditing(false);
       toast({ title: "Success", description: "Profile updated successfully!" });
-    } catch (err: any) {
+    } catch {
       toast({ title: "Error", description: "Failed to update profile", variant: "destructive" });
     } finally {
       setLoading(false);
@@ -117,7 +108,10 @@ export default function Profile() {
                 </div>
               </div>
               <button
-                onClick={() => setIsEditing(!isEditing)}
+                onClick={() => {
+                  setFormData({ name: user.name || '', phone: user.phone || '' });
+                  setIsEditing(!isEditing);
+                }}
                 className="px-4 py-2 bg-[#0D9488] hover:bg-teal-700 text-white font-semibold rounded-lg flex items-center gap-2 transition-all"
               >
                 {isEditing ? <X className="w-4 h-4" /> : <Edit2 className="w-4 h-4" />}

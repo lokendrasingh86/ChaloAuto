@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import api from '@/lib/api';
@@ -22,7 +22,9 @@ export default function PassengerDashboard() {
   const [driverDetails, setDriverDetails] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
 
+  const refreshRevisionRef = useRef(0);
   const fetchDashboardData = async () => {
+    const revision = ++refreshRevisionRef.current;
     if (!user.id) return;
     try {
       const [currentRes, historyRes] = await Promise.all([
@@ -30,6 +32,7 @@ export default function PassengerDashboard() {
         api.get(`/rides/passenger/${user.id}/history`)
       ]);
       
+      if (revision !== refreshRevisionRef.current) return;
       const current = currentRes.data.currentRides[0];
       if (current) {
         setActiveRide(current);
@@ -58,6 +61,8 @@ export default function PassengerDashboard() {
       
       socket.connect();
 
+      socket.on('connect', fetchDashboardData);
+      socket.on('ridePickedUp', fetchDashboardData);
       socket.on('rideMatched', () => fetchDashboardData());
       socket.on('rideUnmatched', () => fetchDashboardData());
 
@@ -85,6 +90,11 @@ export default function PassengerDashboard() {
     }
 
     return () => {
+      // Invalidate outstanding requests when leaving the dashboard.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      refreshRevisionRef.current++;
+      socket.off('connect', fetchDashboardData);
+      socket.off('ridePickedUp', fetchDashboardData);
       socket.off('rideMatched');
       socket.off('rideUnmatched');
       socket.off('rideAccepted');
@@ -213,7 +223,7 @@ export default function PassengerDashboard() {
                    <h2 className="font-bold text-lg mb-1 text-green-900 flex items-center gap-2">
                      Ride Request Active! <div className="w-2 h-2 bg-green-500 rounded-full animate-ping"></div>
                    </h2>
-                   <p className="text-sm text-green-700 font-medium">Status: {activeRide.status}{activeRide.fare != null ? ` · Fare ${inr(activeRide.fare)}` : ''}</p>
+                   <p className="text-sm text-green-700 font-medium">Status: {activeRide.status}{activeRide.fare != null ? ` · Fare ${inr(activeRide.lockedFare ?? activeRide.fare)}` : ''}</p>
                    {driverDetails && (
                        <div className="mt-3 bg-white/60 p-3 rounded-lg border border-green-200">
                          <p className="font-semibold text-green-900">Driver: {driverDetails.name} • {driverDetails.phone}</p>
@@ -383,7 +393,7 @@ export default function PassengerDashboard() {
                             <p className="text-[10px] text-slate-500 font-medium tracking-wide">Driver: {ride.driver.user?.name || ride.driverId}</p>
                           )}
                           {ride.fare != null && (
-                            <p className="text-[11px] text-slate-600 font-semibold">{inr(ride.fare)}{ride.distanceKm ? ` · ${Number(ride.distanceKm).toFixed(1)} km` : ''}{ride.rating ? ` · ${'★'.repeat(ride.rating)}` : ''}</p>
+                            <p className="text-[11px] text-slate-600 font-semibold">{inr(ride.lockedFare ?? ride.fare)}{ride.distanceKm ? ` · ${Number(ride.distanceKm).toFixed(1)} km` : ''}{ride.rating ? ` · ${'★'.repeat(ride.rating)}` : ''}</p>
                           )}
                         </div>
                       </div>
